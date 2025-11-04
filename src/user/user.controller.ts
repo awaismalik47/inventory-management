@@ -1,5 +1,4 @@
-import { Controller, Post, Req, UseGuards } from "@nestjs/common";
-import { Request } from "express";
+import { Body, Controller, Get, Query, Req, UseGuards } from "@nestjs/common";
 import { UserService } from "./user.service";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 
@@ -9,10 +8,8 @@ export class UserController {
 
     constructor( private readonly userService: UserService ) {}
 
-    @Post()
-    async getUserDetails( @Req() req ) {
-        // User info is automatically attached by JwtAuthGuard
-        const userId = req.user.userId;
-        return this.userService.findById( userId );
+    @Get()
+    async getUserDetails( @Query() query: { userId: string } ) {
+        return await this.userService.findById( query.userId );
     }
 }

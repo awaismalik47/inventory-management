@@ -21,16 +21,62 @@ export class ShopService {
 		);
 	}
 
+
 	async findByShop( shop: string ) {
 		return await this.shopModel.findOne({ shop });
 	}
+
 
 	async deleteShop( shop: string) {
 		return await this.shopModel.findOneAndDelete({ shop });
 	}
 
+
 	async findByInstalledByUserId( userId: string ) {
 		return await this.shopModel.findOne({ installedByUserId: userId });
 	}
-  
+
+
+	async CheckShopExistsInShopify( shop: string, accessToken: string ) {
+		try {
+			const response = await fetch(`https://${shop}/admin/api/2025-01/shop.json`, {
+			headers: {
+				"X-Shopify-Access-Token": accessToken,
+				"Content-Type": "application/json",
+			},
+		});	
+
+			if ( response.status === 200 ) {
+				const data = await response.json();
+				return {
+					valid: true,
+					shop: data.shop,
+				};
+			}
+
+			if ( response.status === 401 ) {
+				return {
+					valid: false,
+					error: "Unauthorized or token expired",
+				};
+			}
+
+			if ( response.status === 404 ) {
+				return {
+					valid: false,
+					error: "Shop not found",
+				};
+			}
+
+			return {
+				valid: false,
+				error: `Unexpected status: ${response.status}`,
+			};
+		} catch ( error: any ) {
+			return {
+				valid: false,
+				error: error.message
+			};
+		}
+	}
 }

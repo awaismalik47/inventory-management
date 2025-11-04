@@ -3,7 +3,7 @@ import { Document } from 'mongoose';
 
 
 @Schema({ timestamps: true })
-export class User extends Document {
+export class Users extends Document {
 	@Prop({ required: true, unique: true })
 	email: string;
 
@@ -17,4 +17,4 @@ export class User extends Document {
 	// installedApps: Array<string>;
 }
 
-export const UserSchema = SchemaFactory.createForClass(User);
+export const UsersSchema = SchemaFactory.createForClass(Users);

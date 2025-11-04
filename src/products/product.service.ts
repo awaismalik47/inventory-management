@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import { ShopService } from 'src/shop/shop.service';
@@ -23,7 +23,6 @@ export class ProductService {
     clearShopCache(store: string): void {
         const cacheKey = `shop_${store}`;
         shopCache.delete(cacheKey);
-        console.log(`Cache cleared for shop: ${store}`);
     }
 
     /**
@@ -32,162 +31,363 @@ export class ProductService {
      */
     clearAllShopCache(): void {
         shopCache.clear();
-        console.log('All shop cache cleared');
     }
 
-    async getProducts(store: string, limit: string = '50'): Promise<any> {
-        // Check cache first
-        const cacheKey = `shop_${store}`;
-        const cached = shopCache.get(cacheKey);
-        let shop;
-        
-        if ( cached && (Date.now() - cached.timestamp) < CACHE_TTL ) {
-            shop = cached.data;
-        } else {
-            shop = await this.shopService.findByShop(store);
-            if ( shop ) {
-                shopCache.set(cacheKey, { data: shop, timestamp: Date.now() });
-            }
-        }
-        
-        if ( !shop ) {
-            return {
-                error: 'Shop not found. Please complete OAuth flow first.',
-                instructions: 'Visit /shopify-oauth/init?shop=your-store.myshopify.com first'
-            };
-        }
-        const accessToken = shop.accessToken || process.env.SHOPIFY_ACCESS_TOKEN;
 
+	private async getShop(store: string): Promise<any> {
+		const cacheKey = `shop_${store}`;
+		let shop = shopCache.get(cacheKey)?.data;
+		if (!shop || Date.now() - (shopCache.get(cacheKey)?.timestamp || 0) > CACHE_TTL) {
+			shop = await this.shopService.findByShop(store);
+			if (shop) shopCache.set(cacheKey, { data: shop, timestamp: Date.now() });
+		}
+		return shop;
+	}
+
+	async  getTotalProducts( store: string ) {
+
+		const shop = await this.getShop(store);
+		if (!shop) {
+			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
+		}
+
+		const accessToken = shop.accessToken as string;
+		const url = `https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`;
+	  
+		const query = `
+		  {
+			productsCount(query: "status:active") {
+			  count
+			  precision
+			}
+		  }
+		`;
+	  
+		const response = await fetch(url, {
+		  method: 'POST',
+		  headers: {
+			'Content-Type': 'application/json',
+			'X-Shopify-Access-Token': accessToken,
+		  },
+		  body: JSON.stringify({ query }),
+		});
+	  
+		const data = await response.json();
+		return data.data.productsCount;	
+	}
+
+
+
+	async getProducts(store: string, limit = '50', page = '1'): Promise<any> {
+		const shop = await this.getShop(store);
+		if (!shop) {
+			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
+		}
+	  
+		const accessToken = shop.accessToken as string;
+		const first = Math.max(1, Math.min(250, Number(limit) || 50));
+		const pageNum = Math.max(1, Number(page) || 1);
+	  
+		// Cursor pagination
+		let afterCursor: string | null = null;
+		let hasNextPage = true;
+		let lastCursor: string | null = null;
+	  
 		try {
-			const first = Math.max(1, Math.min(250, Number(limit) || 50));
+		  for (let i = 1; i <= pageNum && hasNextPage; i++) {
 			const query = `
-				query ($first: Int!) {
-					products(first: $first) {
+			  query ($first: Int!, $after: String) {
+				products(first: $first, after: $after, query: "status:active") {
+				  edges {
+					cursor
+					node {
+					  id
+					  title
+					  productType
+					  status
+					  featuredImage { url }
+					  images(first: 100) { edges { node { id url } } }
+					  options { id name values }
+					  variants(first: 100) {
 						edges {
-							node {
-								id
-								title
-								productType
-								status
-								featuredImage { url }
-								images(first: 100) { edges { node { id url } } }
-								options { id name values }
-								variants(first: 100) {
-									edges {
-										node {
-											id
-											title
-											price
-											sku
-											inventoryQuantity
-											inventoryItem { id }
-											image { id url }
-											product { id }
-										}
-									}
-								}
-							}
+						  node {
+							id
+							title
+							price
+							sku
+							inventoryQuantity
+							inventoryItem { id }
+							image { id url }
+							product { id }
+						  }
 						}
+					  }
 					}
+				  }
+				  pageInfo {
+					hasNextPage
+					endCursor
+				  }
 				}
+			  }
 			`;
-
+	  
 			const resp = await lastValueFrom(
-				this.httpService.post(
-					`https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
-					{ query, variables: { first } },
-					{ headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' } }
-				)
+			  this.httpService.post(
+				`https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
+				{ query, variables: { first, after: afterCursor } },
+				{ headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' } }
+			  )
 			);
+	  
+			const productsData = resp.data?.data?.products;
 
-			const edges = resp.data?.data?.products?.edges || [];
-			// Transform GraphQL → REST-like shape expected by getAllProductsModel
-			const products = edges.map((e: any) => {
+			console.log(productsData);
+			hasNextPage = productsData?.pageInfo?.hasNextPage || false;
+			afterCursor = productsData?.pageInfo?.endCursor || null;
+	  
+			// Only return the final page data
+			if (i === pageNum) {
+			  const edges = productsData?.edges || [];
+	  
+			  const products = edges.map((e: any) => {
+				console.log(e);
 				const p = e.node;
 				const productId = this.extractId(p.id);
-				
-				// Pre-compute images map for faster variant image lookup
+	  
 				const images = (p.images?.edges || []).map((ie: any) => ({
-					id: this.extractId(ie.node.id),
-					src: ie.node.url,
+				  id: this.extractId(ie.node.id),
+				  src: ie.node.url,
 				}));
-				const imagesMap = new Map(images.map(img => [img.id, img.src]));
-				
-				const featuredSrc = p.featuredImage?.url || (images[0]?.src ?? '');
-				
+	  
 				const variants = (p.variants?.edges || []).map((ve: any) => {
-					const v = ve.node;
-					return {
+				  const v = ve.node;
+				  return {
+					id: this.extractId(v.id),
+					title: v.title,
+					price: v.price,
+					sku: v.sku,
+					inventory_quantity: Number(v.inventoryQuantity ?? 0),
+					image_id: v.image ? this.extractId(v.image.id) : null,
+					product_id: productId,
+					inventory_item_id: v.inventoryItem
+					  ? this.extractId(v.inventoryItem.id)
+					  : null,
+				  };
+				});
+	  
+				const options = (p.options || []).map((o: any) => ({
+				  id: this.extractId(o.id),
+				  product_id: productId,
+				  name: o.name,
+				  values: o.values,
+				}));
+	  
+				return {
+				  id: productId,
+				  title: p.title,
+				  product_type: p.productType,
+				  status: p.status,
+				  image: { src: p.featuredImage?.url || images[0]?.src || '' },
+				  images,
+				  variants,
+				  options,
+				};
+			  });
+	  
+			  const productsWithInventory = await this.fetchInventoryForProducts(products, store, accessToken);
+	  
+			  return {
+				page: pageNum,
+				perPage: first,
+				hasNextPage,
+				nextCursor: afterCursor,
+				products: this.getAllProductsModel({ products: productsWithInventory }),
+				totalProducts: productsWithInventory.length,
+			  };
+			}
+		  }
+	  
+		  return []; // fallback
+		} catch (error: any) {
+		  const errorMessage = error?.response?.data ? JSON.stringify(error.response.data) : error?.message || 'Unknown error';
+		  throw new UnauthorizedException(errorMessage);
+		}
+	  }
+
+
+	async getAllProducts(store: string): Promise<any> {
+		const shop = await this.getShop(store);
+		if (!shop) {
+			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
+		}
+	  
+		const accessToken = shop.accessToken as string;
+		const first = 250; // Maximum allowed by Shopify GraphQL API
+		let afterCursor: string | null = null;
+		let hasNextPage = true;
+		const allProducts: any[] = [];
+		let pageCount = 0;
+	  
+		try {
+			console.log(`[getAllProducts] Starting to fetch all products for store: ${store}`);
+			while (hasNextPage) {
+				pageCount++;
+				const query = `
+				  query ($first: Int!, $after: String) {
+					products(first: $first, after: $after, query: "status:active") {
+					  edges {
+						cursor
+						node {
+						  id
+						  title
+						  productType
+						  status
+						  featuredImage { url }
+						  images(first: 100) { edges { node { id url } } }
+						  options { id name values }
+						  variants(first: 100) {
+							edges {
+							  node {
+								id
+								title
+								price
+								sku
+								inventoryQuantity
+								inventoryItem { id }
+								image { id url }
+								product { id }
+							  }
+							}
+						  }
+						}
+					  }
+					  pageInfo {
+						hasNextPage
+						endCursor
+					  }
+					}
+				  }
+				`;
+		  
+				const resp = await lastValueFrom(
+				  this.httpService.post(
+					`https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
+					{ query, variables: { first, after: afterCursor } },
+					{ headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' } }
+				  )
+				);
+		  
+				const productsData = resp.data?.data?.products;
+				const edges = productsData?.edges || [];
+		  
+				const products = edges.map((e: any) => {
+					const p = e.node;
+					const productId = this.extractId(p.id);
+		  
+					const images = (p.images?.edges || []).map((ie: any) => ({
+					  id: this.extractId(ie.node.id),
+					  src: ie.node.url,
+					}));
+		  
+					const variants = (p.variants?.edges || []).map((ve: any) => {
+					  const v = ve.node;
+					  return {
 						id: this.extractId(v.id),
 						title: v.title,
 						price: v.price,
 						sku: v.sku,
 						inventory_quantity: Number(v.inventoryQuantity ?? 0),
-						old_inventory_quantity: 0,
 						image_id: v.image ? this.extractId(v.image.id) : null,
 						product_id: productId,
-						inventory_item_id: v.inventoryItem ? this.extractId(v.inventoryItem.id) : null,
+						inventory_item_id: v.inventoryItem
+						  ? this.extractId(v.inventoryItem.id)
+						  : null,
+					  };
+					});
+		  
+					const options = (p.options || []).map((o: any) => ({
+					  id: this.extractId(o.id),
+					  product_id: productId,
+					  name: o.name,
+					  values: o.values,
+					}));
+		  
+					return {
+					  id: productId,
+					  title: p.title,
+					  product_type: p.productType,
+					  status: p.status,
+					  image: { src: p.featuredImage?.url || images[0]?.src || '' },
+					  images,
+					  variants,
+					  options,
 					};
 				});
-				
-				const options = (p.options || []).map((o: any) => ({
-					id: this.extractId(o.id),
-					product_id: productId,
-					name: o.name,
-					values: o.values,
-				}));
-
-				return {
-					id: productId,
-					title: p.title,
-					product_type: p.productType,
-					status: p.status,
-					image: { src: featuredSrc },
-					images,
-					variants,
-					options,
-				};
-			});
-
-			// Fetch inventory data for all variants
-			const productsWithInventory = await this.fetchInventoryForProducts(products, store, accessToken);
-			return this.getAllProductsModel({ products: productsWithInventory });
-		} catch (error) {
-			throw new Error('Failed to fetch products');
+		  
+				allProducts.push(...products);
+		  
+				hasNextPage = productsData?.pageInfo?.hasNextPage || false;
+				afterCursor = productsData?.pageInfo?.endCursor || null;
+		  
+				console.log(`[getAllProducts] Fetched page ${pageCount}: ${products.length} products (Total so far: ${allProducts.length})`);
+		  
+				// Reduced delay: Shopify GraphQL allows 50 cost points/second (250 products = ~50 points)
+				// 100ms delay allows ~10 requests/second, well within limits
+				if (hasNextPage) {
+					await new Promise(resolve => setTimeout(resolve, 100));
+				}
+			}
+			
+			console.log(`[getAllProducts] Completed fetching all products. Total products: ${allProducts.length}`);
+		  
+			// Fetch inventory for all products
+			const productsWithInventory = await this.fetchInventoryForProducts(allProducts, store, accessToken);
+		  
+			return {
+				products: this.getAllProductsModel({ products: productsWithInventory }),
+				totalProducts: productsWithInventory.length,
+			};
+		} catch (error: any) {
+			const errorMessage = error?.response?.data ? JSON.stringify(error.response.data) : error?.message || 'Unknown error';
+			throw new UnauthorizedException(errorMessage);
 		}
-    }
+	}
 
 
     private async fetchInventoryForProducts(products: any[], store: string, accessToken: string): Promise<any[]> {
         
-        // Collect all inventory item IDs
+        // Collect all inventory item IDs - optimized single loop
         const inventoryItemIds: number[] = [];
         const variantMap = new Map<number, any>();
         
-        for ( const product of products ) {
-            for ( const variant of product.variants ) {
-                if ( variant.inventory_item_id ) {
+        // Optimized: Single loop through all products and variants
+        for (const product of products) {
+            for (const variant of product.variants) {
+                // Set default values first
+                variant.available = 0;
+                variant.incoming = 0;
+                variant.committed = 0;
+                variant.on_hand = 0;
+                
+                // Collect inventory item IDs if available
+                if (variant.inventory_item_id) {
                     inventoryItemIds.push(variant.inventory_item_id);
                     variantMap.set(variant.inventory_item_id, variant);
                 }
-				// Set default values
-				variant.available = 0;
-				variant.incoming = 0;
-				variant.committed = 0;
-				variant.on_hand = 0;
-			}
+            }
         }
         
         if ( inventoryItemIds.length === 0 ) {
             return products;
         }
         
-        // Batch fetch inventory data
+        // Batch fetch inventory data with parallel processing
         try {
             const inventoryData = await this.fetchInventoryLevelsBatch(inventoryItemIds, store, accessToken);
             
-            // Apply inventory data to variants
-            for (const [inventoryItemId, data] of inventoryData.entries()) {
+            // Apply inventory data to variants - optimized Map lookup
+            for ( const [inventoryItemId, data] of inventoryData.entries() ) {
                 const variant = variantMap.get(inventoryItemId);
                 if (variant) {
                     variant.available = data.available || 0;
@@ -197,7 +397,7 @@ export class ProductService {
                 }
             }
         } catch (error) {
-			throw new Error('Failed to fetch inventory data');
+			throw new UnauthorizedException(error.message);
             // Default values are already set above
         }
         
@@ -207,15 +407,37 @@ export class ProductService {
 
     private async fetchInventoryLevelsBatch(inventoryItemIds: number[], store: string, accessToken: string): Promise<Map<number, any>> {
         // Process in batches of 10 to avoid GraphQL query size limits
+        // Optimized: Process multiple batches in parallel (up to 5 concurrent batches)
         const batchSize = 10;
+        const maxConcurrent = 5; // Process 5 batches at a time
         const result = new Map<number, any>();
         
-        for (let i = 0; i < inventoryItemIds.length; i += batchSize) {
-            const batch = inventoryItemIds.slice(i, i + batchSize);
-            const batchResult = await this.fetchInventoryBatch(batch, store, accessToken);
+        for (let i = 0; i < inventoryItemIds.length; i += batchSize * maxConcurrent) {
+            // Create batches for parallel processing
+            const batchPromises: Promise<Map<number, any>>[] = [];
             
-            for (const [id, data] of batchResult.entries()) {
-                result.set(id, data);
+            for (let j = 0; j < maxConcurrent && (i + j * batchSize) < inventoryItemIds.length; j++) {
+                const batchStart = i + j * batchSize;
+                const batch = inventoryItemIds.slice(batchStart, batchStart + batchSize);
+                
+                if (batch.length > 0) {
+                    batchPromises.push(this.fetchInventoryBatch(batch, store, accessToken));
+                }
+            }
+            
+            // Wait for all batches in this group to complete
+            const batchResults = await Promise.all(batchPromises);
+            
+            // Merge results
+            for (const batchResult of batchResults) {
+                for (const [id, data] of batchResult.entries()) {
+                    result.set(id, data);
+                }
+            }
+            
+            // Small delay between batch groups to avoid rate limiting
+            if (i + (batchSize * maxConcurrent) < inventoryItemIds.length) {
+                await new Promise(resolve => setTimeout(resolve, 100));
             }
         }
         
@@ -223,7 +445,7 @@ export class ProductService {
     }
 
 
-    private async fetchInventoryBatch(inventoryItemIds: number[], store: string, accessToken: string): Promise<Map<number, any>> {
+    private async fetchInventoryBatch( inventoryItemIds: number[], store: string, accessToken: string ): Promise<Map<number, any>> {
         // Build a single GraphQL query for multiple inventory items
         const queryParts = inventoryItemIds.map((id, index) => `
             inventoryItem${index}: inventoryItem(id: "gid://shopify/InventoryItem/${id}") {
@@ -296,11 +518,11 @@ export class ProductService {
 		if ( !res ) return [];
 
 		const products: IProductModel[] = [];
-		
 		for ( const product of res.products ) {
 			const model: IProductModel = {
 				id         : product.id as number,
 				title      : product.title,
+				sku        : product.sku,
 				productType: product.product_type,
 				status     : product.status,
 				variants   : this.getVariantsModel( product.variants, product.images ),
@@ -369,20 +591,4 @@ export class ProductService {
 		return (imagesMap.get(variantId) as string) || '';
 	}
 
-
-	async processProductUpdate(productData: any): Promise<void> {
-		console.log('processProductUpdate', productData);
-	}
-
-	async processInventoryUpdate(inventoryData: any): Promise<void> {
-		console.log('processInventoryUpdate', inventoryData);
-	}
-	
-	async processInventoryCreate(inventoryData: any): Promise<void> {
-		console.log('processInventoryCreate', inventoryData);
-	}
-
-	async processInventoryDelete(inventoryData: any): Promise<void> {
-		console.log('processInventoryDelete', inventoryData);
-	}
 }

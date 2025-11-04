@@ -9,7 +9,13 @@ export class ProductController {
 
 
     @Get()
-    async getAllProducts(@Query() query: { store?: string; limit?: string }): Promise<any> {
-        return this.productService.getProducts( query.store ?? '', query.limit || '50' );
+    async getAllProducts(@Query() query: { store?: string }): Promise<any> {
+        return this.productService.getAllProducts( query.store ?? '' );
+    }
+
+
+    @Get('total')
+    async getTotalProducts(@Query() query: { store?: string }): Promise<any> {
+        return this.productService.getTotalProducts( query.store ?? '' );
     }
 }

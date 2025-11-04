@@ -7,6 +7,7 @@ export interface ProductQueryModel {
 export interface IProductModel {
     id         : number;
     title      : string;
+    sku        : string;
     productType: string;
     status     : string;
     variants   : IVariantModel[];

@@ -21,6 +21,8 @@ export class JwtAuthGuard implements CanActivate {
       
       // Attach user info to request object for use in controllers
       request['user'] = payload;
+      // Also attach the raw token so controllers can access it without re-reading headers
+      request['token'] = token;
       
       return true;
     } catch (error) {

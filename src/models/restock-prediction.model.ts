@@ -1,9 +1,12 @@
+import { UrgencyLevelEnum } from "src/core/enums";
+
 export interface RestockPredictionModel {
     productImage: string;
     productId: number;
     productName: string;
     variantId: number;
     variantName: string;
+    sku: string;
     shortRangeSales: number;
     longRangeSales: number;
     perDaySoldShortRange: number;
@@ -14,6 +17,7 @@ export interface RestockPredictionModel {
     recommendedAverageStock: number;
     recommendedRestockShortRange: number;
     recommendedRestockLongRange: number;
+    urgencyLevel: UrgencyLevelEnum;
 }
 
 
@@ -22,5 +26,6 @@ export interface RestockPredictionQueryModel {
     limit?        : string;
     rangeDays1?   : string; 
     rangeDays2?   : string;
-    urgencyFilter?:  'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+    futureDays?   : string;
+    urgency?      : UrgencyLevelEnum | null;
 }

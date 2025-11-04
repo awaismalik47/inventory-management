@@ -9,7 +9,7 @@ export default () => ({
     appProxy:{
         clientId: process.env.SHOPIFY_CLIENT_ID,
         clientSecret: process.env.SHOPIFY_CLIENT_SECRET,
-        scopes: process.env.SHOPIFY_SCOPES ? process.env.SHOPIFY_SCOPES.split(',') : ['read_products', 'write_products', 'read_orders', 'write_orders', 'read_inventory', 'read_locations'],
+        scopes: process.env.SHOPIFY_SCOPES ? process.env.SHOPIFY_SCOPES.split(',') : ['read_products', 'read_orders', 'read_inventory', 'read_locations'],
     },
     apiVersion: process.env.SHOPIFY_API_VERSION || '2025-10',
   },

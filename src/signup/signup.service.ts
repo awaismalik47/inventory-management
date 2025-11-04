@@ -1,7 +1,7 @@
 import { Injectable, ConflictException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { User } from 'src/schema/user.schema';
+import { Users } from 'src/schema/user.schema';
 import * as bcrypt from 'bcrypt';
 import type { SignupDataModel } from 'src/models/user.model';
 import { SignupDto } from './dto';
@@ -9,7 +9,7 @@ import { SignupDto } from './dto';
 @Injectable()
 export class SignupService {
 
- 	constructor( @InjectModel(User.name) private userModel: Model<User> ) {}
+ 	constructor( @InjectModel(Users.name) private userModel: Model<Users> ) {}
 
 
 	async addUser(dto: SignupDto) {

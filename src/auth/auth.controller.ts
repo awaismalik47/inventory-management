@@ -1,4 +1,4 @@
-import { Controller, Get, HttpCode, Query, Redirect, Req } from '@nestjs/common';
+import { BadRequestException, Controller, Get, HttpCode, Query, Redirect, Req } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
@@ -29,6 +29,8 @@ export class AuthController {
     @HttpCode(302)
     @Redirect()
     init(@Query() query: OAuthQueryDto, @Req() req: Request) {
+
+        throw new BadRequestException('This route is not available');
 
         // Validate required parameters
         if ( !query.shop ) {
@@ -119,17 +121,17 @@ export class AuthController {
             // Clear cached shop data to ensure fresh access token is used
             this.productService.clearShopCache(shopDomain);
             
-            // Register webhooks after successful OAuth
-            try {
-                await this.webhooksService.registerAllWebHooks(shopDomain, response.data.access_token);
-                console.log('✅ All webhooks registered successfully');
-            } catch (webhookError) {
-                console.error('❌ Failed to register webhooks:', webhookError);
-                // Don't fail the OAuth flow if webhook registration fails
-            }
+            // // Register webhooks after successful OAuth
+            // try {
+            //     await this.webhooksService.registerAllWebHooks(shopDomain, response.data.access_token);
+            //     console.log('✅ All webhooks registered successfully');
+            // } catch (webhookError) {
+            //     console.error('❌ Failed to register webhooks:', webhookError);
+            //     // Don't fail the OAuth flow if webhook registration fails
+            // }
             
             return {
-              url: `https://${shopDomain}/admin/apps`
+              url: `http://192.168.5.110:4200/main/items`
             };
         } catch (error) {
             console.error('OAuth error:', error.response?.data as any || error.message as string);

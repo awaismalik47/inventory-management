@@ -9,7 +9,7 @@ export class SignupController {
     constructor(private readonly signupService: SignupService ) {}
 
     @Post()
-    @HttpCode(HttpStatus.CREATED)
+    @HttpCode( HttpStatus.CREATED )
     async signup( @Body() dto: SignupDto ) {
         return this.signupService.addUser( dto);
     }

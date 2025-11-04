@@ -5,7 +5,7 @@ import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
 
 // Schemas
-import { User } from "src/schema/user.schema";
+import { Users } from "src/schema/user.schema";
 
 // Services
 import { ShopService } from "src/shop/shop.service";
@@ -15,7 +15,7 @@ import { SigninDto } from "./dto";
 
 
 export class LoginService {
-	constructor( @InjectModel(User.name) private userModel: Model<User>, private readonly shopService: ShopService ) {}
+	constructor( @InjectModel(Users.name) private userModel: Model<Users>, private readonly shopService: ShopService ) {}
 
 	async login( dto: SigninDto ) {
 
@@ -33,6 +33,8 @@ export class LoginService {
 
 		const token = jwt.sign( { userId: user?._id }, process.env.JWT_SECRET!, { expiresIn: '24h' } );
 		const shop  = await this.shopService.findByInstalledByUserId( user?._id as string );
+
+		console.log(shop);
 
 		return {
 			message     : 'Login successful',

@@ -11,12 +11,13 @@ import { ProductModule } from './products/product.module';
 import { OrdersModule } from './orders/orders.module';
 import { SignupModule } from './signup/signup.module';
 import { LoginModule } from './signin/signin.module';
-import { AppStatusModule } from './app-status/app-status.module';
+import { AppRegistrationModule } from './app-registration/app-register.module';
 import { RestockPredictionModule } from './restock-prediction/restock-prediction.module';
 import { WebhooksModule } from './webhooks/webhooks.module';
 import { UserModule } from './user/user.module';
 import { JwtModule } from '@nestjs/jwt';
 import { EventsModule } from './events/events.module';
+import { ExportModule } from './export/export.module';
 
 
 @Module({
@@ -48,11 +49,12 @@ import { EventsModule } from './events/events.module';
 		OrdersModule,
 		SignupModule,
 		LoginModule,
-		AppStatusModule,
+		AppRegistrationModule,
 		RestockPredictionModule,
 		WebhooksModule,
 		UserModule,
 		EventsModule,
+		ExportModule,
   	],
 
 	controllers: [AppController],
