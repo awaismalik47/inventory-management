@@ -442,97 +442,102 @@ export class ProductService {
     }
 
 
-    private async fetchInventoryByProducts(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
-        // Build a GraphQL query using the same structure as getInventoryLevelByProductId
-        // This ensures we get accurate incoming quantities
-        const queryParts = productIds.map((id, index) => `
-            product${index}: product(id: "gid://shopify/Product/${id}") {
-                id
-                variants(first: 100) {
-                    edges {
-                        node {
-                            id
-                            title
-                            sku
-                            inventoryItem {
-                                id
-                                inventoryLevels(first: 10) {
-                                    edges {
-                                        node {
-                                            id
-                                            quantities(names: ["available", "incoming", "committed", "on_hand"]) {
-                                                name
-                                                quantity
-                                            }
-                                            location {
-                                                id
-                                                name
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        `);
-
-        const query = `query { ${queryParts.join('')} }`;
-
-        const resp = await lastValueFrom(
-            this.httpService.post(
-                `https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
-                { query },
-                { 
-                    headers: { 
-                        'X-Shopify-Access-Token': accessToken, 
-                        'Content-Type': 'application/json' 
-                    } 
-                }
-            )
-        );
-
+    /**
+     * Extract inventory quantities from product data returned by getInventoryLevelByProductId
+     * This ensures we use the exact same data structure and aggregation logic
+     */
+    private extractQuantitiesFromProductData(productId: number, productData: any): Map<string, any> {
         const result = new Map<string, any>();
-        const data = resp.data?.data || {};
+        
+        if (!productData || !productData.variants) {
+            return result;
+        }
 
-        productIds.forEach((productId, index) => {
-            const product = data[`product${index}`];
-            if (!product) return;
+        const variants = productData.variants?.edges || [];
 
-            const variants = product.variants?.edges || [];
+        for (const variantEdge of variants) {
+            const variant = variantEdge.node;
+            const variantId = this.extractId(variant.id);
+            const variantKey = `${productId}_${variantId}`;
 
-            for (const variantEdge of variants) {
-                const variant = variantEdge.node;
-                const variantId = this.extractId(variant.id);
-                const variantKey = `${productId}_${variantId}`;
+            const inventoryItem = variant.inventoryItem;
+            if (!inventoryItem) {
+                continue;
+            }
 
-                const inventoryItem = variant.inventoryItem;
-                if (!inventoryItem) continue;
+            const inventoryLevels = inventoryItem.inventoryLevels?.edges || [];
+            
+            // Aggregate quantities across all locations (same logic as getInventoryLevelByProductId)
+            const aggregatedQuantities = {
+                available: 0,
+                incoming: 0,
+                committed: 0,
+                on_hand: 0
+            };
 
-                const inventoryLevels = inventoryItem.inventoryLevels?.edges || [];
-                
-                // Aggregate quantities across all locations (same logic as getInventoryLevelByProductId)
-                const aggregatedQuantities = {
-                    available: 0,
-                    incoming: 0,
-                    committed: 0,
-                    on_hand: 0
-                };
-
-                for (const level of inventoryLevels) {
-                    const quantities = level.node.quantities || [];
-                    for (const qty of quantities) {
-                        if (qty.name in aggregatedQuantities) {
-                            aggregatedQuantities[qty.name] += qty.quantity || 0;
-                        }
+            for (const level of inventoryLevels) {
+                const quantities = level.node.quantities || [];
+                for (const qty of quantities) {
+                    if (qty.name in aggregatedQuantities) {
+                        aggregatedQuantities[qty.name] += qty.quantity || 0;
                     }
                 }
-
-                result.set(variantKey, aggregatedQuantities);
             }
-        });
 
+            result.set(variantKey, aggregatedQuantities);
+        }
+
+        return result;
+    }
+
+    /**
+     * Fetch inventory for multiple products using the same method as getInventoryLevelByProductId
+     * This ensures accurate quantities by using the exact same query structure
+     */
+    private async fetchInventoryByProducts(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
+        console.log(`[fetchInventoryByProducts] Fetching inventory for ${productIds.length} products using getInventoryLevelByProductId method:`, productIds);
+        
+        const result = new Map<string, any>();
+        const shop = await this.getShop(store);
+        if (!shop) {
+            throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
+        }
+
+        // Process products in parallel batches to maintain performance
+        const batchSize = 5; // Process 5 products at a time
+        for (let i = 0; i < productIds.length; i += batchSize) {
+            const batch = productIds.slice(i, i + batchSize);
+            
+            // Fetch inventory for each product in the batch using the same method that works correctly
+            const batchPromises = batch.map(async (productId) => {
+                try {
+                    const productData = await this.getInventoryLevelByProductId(store, String(productId));
+                    if (productData) {
+                        const quantities = this.extractQuantitiesFromProductData(productId, productData);
+                        return quantities;
+                    }
+                    return new Map<string, any>();
+                } catch (error: any) {
+                    console.error(`[fetchInventoryByProducts] Error fetching inventory for product ${productId}:`, error.message);
+                    return new Map<string, any>(); // Return empty map on error, don't fail entire batch
+                }
+            });
+
+            // Wait for batch to complete and merge results
+            const batchResults = await Promise.all(batchPromises);
+            for (const batchResult of batchResults) {
+                for (const [key, value] of batchResult.entries()) {
+                    result.set(key, value);
+                }
+            }
+
+            // Small delay between batches to avoid rate limiting
+            if (i + batchSize < productIds.length) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+
+        console.log(`[fetchInventoryByProducts] Successfully fetched inventory for ${result.size} variants from ${productIds.length} products`);
         return result;
     }
 	
