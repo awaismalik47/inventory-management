@@ -17,6 +17,7 @@ import { SigninDto } from "./dto";
 export class LoginService {
 	constructor( @InjectModel(Users.name) private userModel: Model<Users>, private readonly shopService: ShopService ) {}
 
+	
 	async login( dto: SigninDto ) {
 
 		const user = await this.userModel.findOne({ email: dto?.email });
@@ -33,8 +34,6 @@ export class LoginService {
 
 		const token = jwt.sign( { userId: user?._id }, process.env.JWT_SECRET!, { expiresIn: '24h' } );
 		const shop  = await this.shopService.findByInstalledByUserId( user?._id as string );
-
-		console.log(shop);
 
 		return {
 			message     : 'Login successful',

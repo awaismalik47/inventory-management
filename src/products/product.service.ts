@@ -78,7 +78,7 @@ export class ProductService {
 
 
 
-	async getProducts(store: string, limit = '50', page = '1'): Promise<any> {
+	async getProducts( store: string, limit = '50', page = '1' ): Promise<any> {
 		const shop = await this.getShop(store);
 		if (!shop) {
 			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
@@ -198,12 +198,12 @@ export class ProductService {
 			  const productsWithInventory = await this.fetchInventoryForProducts(products, store, accessToken);
 	  
 			  return {
-				page: pageNum,
-				perPage: first,
+				page         : pageNum,
+				perPage      : first,
 				hasNextPage,
-				nextCursor: afterCursor,
-				products: this.getAllProductsModel({ products: productsWithInventory }),
-				totalProducts: productsWithInventory.length,
+				nextCursor   : afterCursor,
+				products     : this.getAllProductsModel( { products: productsWithInventory } ),
+				totalProducts:  productsWithInventory.length,
 			  };
 			}
 		  }
@@ -231,7 +231,7 @@ export class ProductService {
 	  
 		try {
 			console.log(`[getAllProducts] Starting to fetch all products for store: ${store}`);
-			while (hasNextPage) {
+			while ( hasNextPage ) {
 				pageCount++;
 				const query = `
 				  query ($first: Int!, $after: String) {
@@ -286,39 +286,37 @@ export class ProductService {
 					const productId = this.extractId(p.id);
 		  
 					const images = (p.images?.edges || []).map((ie: any) => ({
-					  id: this.extractId(ie.node.id),
-					  src: ie.node.url,
+						id : this.extractId(ie.node.id),
+						src: ie.node.url,
 					}));
 		  
 					const variants = (p.variants?.edges || []).map((ve: any) => {
-					  const v = ve.node;
-					  return {
-						id: this.extractId(v.id),
-						title: v.title,
-						price: v.price,
-						sku: v.sku,
-						inventory_quantity: Number(v.inventoryQuantity ?? 0),
-						image_id: v.image ? this.extractId(v.image.id) : null,
-						product_id: productId,
-						inventory_item_id: v.inventoryItem
-						  ? this.extractId(v.inventoryItem.id)
-						  : null,
-					  };
+						const v = ve.node;
+						return {
+							id                : this.extractId(v.id),
+							title             : v.title,
+							price             : v.price,
+							sku               : v.sku,
+							inventory_quantity: Number(v.inventoryQuantity ?? 0),
+							image_id          : v.image ? this.extractId(v.image.id): null,
+							product_id        : productId,
+							inventory_item_id : v.inventoryItem ? this.extractId( v.inventoryItem.id ) : null,
+						};
 					});
 		  
 					const options = (p.options || []).map((o: any) => ({
-					  id: this.extractId(o.id),
-					  product_id: productId,
-					  name: o.name,
-					  values: o.values,
+						id        : this.extractId(o.id),
+						product_id: productId,
+						name      : o.name,
+						values    : o.values,
 					}));
 		  
 					return {
-					  id: productId,
-					  title: p.title,
+					  id          : productId,
+					  title       : p.title,
 					  product_type: p.productType,
-					  status: p.status,
-					  image: { src: p.featuredImage?.url || images[0]?.src || '' },
+					  status      : p.status,
+					  image       : { src: p.featuredImage?.url || images[0]?.src || '' },
 					  images,
 					  variants,
 					  options,
@@ -355,7 +353,7 @@ export class ProductService {
 	}
 
 
-    private async fetchInventoryForProducts(products: any[], store: string, accessToken: string): Promise<any[]> {
+    private async fetchInventoryForProducts( products: any[], store: string, accessToken: string ): Promise<any[]> {
         
         // Collect product IDs and create variant mapping
         const productIds: number[] = [];
