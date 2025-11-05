@@ -287,6 +287,7 @@ export class RestockPredictionService {
 
 	// Calculate how much to restock based on sales velocity and current inventory
 	private calculateRestockQuantity(perDaySales: number, predictionDays: number, availableStock: number, incomingStock: number): number {
+		console.log(`[RestockPrediction] Calculating restock quantity for perDaySales: ${perDaySales}, predictionDays: ${predictionDays}, availableStock: ${availableStock}, incomingStock: ${incomingStock}`);
 		const expectedSales  = perDaySales * predictionDays;
 		const totalInventory = availableStock + incomingStock;
 		const restockNeeded  = Math.max(0, expectedSales - totalInventory);
