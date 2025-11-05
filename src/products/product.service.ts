@@ -357,12 +357,13 @@ export class ProductService {
 
     private async fetchInventoryForProducts(products: any[], store: string, accessToken: string): Promise<any[]> {
         
-        // Collect all inventory item IDs - optimized single loop
-        const inventoryItemIds: number[] = [];
-        const variantMap = new Map<number, any>();
+        // Collect product IDs and create variant mapping
+        const productIds: number[] = [];
+        const variantMap = new Map<string, any>(); // key: "productId_variantId"
         
         // Optimized: Single loop through all products and variants
         for (const product of products) {
+            productIds.push(product.id);
             for (const variant of product.variants) {
                 // Set default values first
                 variant.available = 0;
@@ -370,25 +371,23 @@ export class ProductService {
                 variant.committed = 0;
                 variant.on_hand = 0;
                 
-                // Collect inventory item IDs if available
-                if (variant.inventory_item_id) {
-                    inventoryItemIds.push(variant.inventory_item_id);
-                    variantMap.set(variant.inventory_item_id, variant);
-                }
+                // Create a map key for this variant
+                const variantKey = `${product.id}_${variant.id}`;
+                variantMap.set(variantKey, variant);
             }
         }
         
-        if ( inventoryItemIds.length === 0 ) {
+        if ( productIds.length === 0 ) {
             return products;
         }
         
-        // Batch fetch inventory data with parallel processing
+        // Batch fetch inventory data using product-based queries (same as getInventoryLevelByProductId)
         try {
-            const inventoryData = await this.fetchInventoryLevelsBatch(inventoryItemIds, store, accessToken);
+            const inventoryData = await this.fetchInventoryByProductsBatch(productIds, store, accessToken);
             
-            // Apply inventory data to variants - optimized Map lookup
-            for ( const [inventoryItemId, data] of inventoryData.entries() ) {
-                const variant = variantMap.get(inventoryItemId);
+            // Apply inventory data to variants
+            for (const [variantKey, data] of inventoryData.entries()) {
+                const variant = variantMap.get(variantKey);
                 if (variant) {
                     variant.available = data.available || 0;
                     variant.incoming = data.incoming || 0;
@@ -405,23 +404,23 @@ export class ProductService {
     }
 
 
-    private async fetchInventoryLevelsBatch(inventoryItemIds: number[], store: string, accessToken: string): Promise<Map<number, any>> {
-        // Process in batches of 10 to avoid GraphQL query size limits
-        // Optimized: Process multiple batches in parallel (up to 5 concurrent batches)
-        const batchSize = 10;
-        const maxConcurrent = 5; // Process 5 batches at a time
-        const result = new Map<number, any>();
+    private async fetchInventoryByProductsBatch(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
+        // Process in batches of 5 products to avoid GraphQL query size limits
+        // Using product-based queries (same structure as getInventoryLevelByProductId)
+        const batchSize = 5;
+        const maxConcurrent = 3; // Process 3 batches at a time
+        const result = new Map<string, any>();
         
-        for (let i = 0; i < inventoryItemIds.length; i += batchSize * maxConcurrent) {
+        for (let i = 0; i < productIds.length; i += batchSize * maxConcurrent) {
             // Create batches for parallel processing
-            const batchPromises: Promise<Map<number, any>>[] = [];
+            const batchPromises: Promise<Map<string, any>>[] = [];
             
-            for (let j = 0; j < maxConcurrent && (i + j * batchSize) < inventoryItemIds.length; j++) {
+            for (let j = 0; j < maxConcurrent && (i + j * batchSize) < productIds.length; j++) {
                 const batchStart = i + j * batchSize;
-                const batch = inventoryItemIds.slice(batchStart, batchStart + batchSize);
+                const batch = productIds.slice(batchStart, batchStart + batchSize);
                 
                 if (batch.length > 0) {
-                    batchPromises.push(this.fetchInventoryBatch(batch, store, accessToken));
+                    batchPromises.push(this.fetchInventoryByProducts(batch, store, accessToken));
                 }
             }
             
@@ -430,13 +429,13 @@ export class ProductService {
             
             // Merge results
             for (const batchResult of batchResults) {
-                for (const [id, data] of batchResult.entries()) {
-                    result.set(id, data);
+                for (const [key, data] of batchResult.entries()) {
+                    result.set(key, data);
                 }
             }
             
             // Small delay between batch groups to avoid rate limiting
-            if (i + (batchSize * maxConcurrent) < inventoryItemIds.length) {
+            if (i + (batchSize * maxConcurrent) < productIds.length) {
                 await new Promise(resolve => setTimeout(resolve, 100));
             }
         }
@@ -445,22 +444,35 @@ export class ProductService {
     }
 
 
-    private async fetchInventoryBatch( inventoryItemIds: number[], store: string, accessToken: string ): Promise<Map<number, any>> {
-        // Build a single GraphQL query for multiple inventory items
-        const queryParts = inventoryItemIds.map((id, index) => `
-            inventoryItem${index}: inventoryItem(id: "gid://shopify/InventoryItem/${id}") {
+    private async fetchInventoryByProducts(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
+        // Build a GraphQL query using the same structure as getInventoryLevelByProductId
+        // This ensures we get accurate incoming quantities
+        const queryParts = productIds.map((id, index) => `
+            product${index}: product(id: "gid://shopify/Product/${id}") {
                 id
-                inventoryLevels(first: 10) {
+                variants(first: 100) {
                     edges {
                         node {
                             id
-                            quantities(names: ["available", "incoming", "committed", "on_hand"]) {
-                                name
-                                quantity
-                            }
-                            location {
+                            title
+                            sku
+                            inventoryItem {
                                 id
-                                name
+                                inventoryLevels(first: 10) {
+                                    edges {
+                                        node {
+                                            id
+                                            quantities(names: ["available", "incoming", "committed", "on_hand"]) {
+                                                name
+                                                quantity
+                                            }
+                                            location {
+                                                id
+                                                name
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -483,31 +495,44 @@ export class ProductService {
             )
         );
 
-        const result = new Map<number, any>();
+        const result = new Map<string, any>();
         const data = resp.data?.data || {};
 
-        inventoryItemIds.forEach((id, index) => {
-            const inventoryItem = data[`inventoryItem${index}`];
-            const inventoryLevels = inventoryItem?.inventoryLevels?.edges || [];
-            
-            // Aggregate quantities across all locations
-            const aggregatedQuantities = {
-                available: 0,
-                incoming: 0,
-                committed: 0,
-                on_hand: 0
-            };
+        productIds.forEach((productId, index) => {
+            const product = data[`product${index}`];
+            if (!product) return;
 
-            for (const level of inventoryLevels) {
-                const quantities = level.node.quantities || [];
-                for (const qty of quantities) {
-                    if (qty.name in aggregatedQuantities) {
-                        aggregatedQuantities[qty.name] += qty.quantity || 0;
+            const variants = product.variants?.edges || [];
+
+            for (const variantEdge of variants) {
+                const variant = variantEdge.node;
+                const variantId = this.extractId(variant.id);
+                const variantKey = `${productId}_${variantId}`;
+
+                const inventoryItem = variant.inventoryItem;
+                if (!inventoryItem) continue;
+
+                const inventoryLevels = inventoryItem.inventoryLevels?.edges || [];
+                
+                // Aggregate quantities across all locations (same logic as getInventoryLevelByProductId)
+                const aggregatedQuantities = {
+                    available: 0,
+                    incoming: 0,
+                    committed: 0,
+                    on_hand: 0
+                };
+
+                for (const level of inventoryLevels) {
+                    const quantities = level.node.quantities || [];
+                    for (const qty of quantities) {
+                        if (qty.name in aggregatedQuantities) {
+                            aggregatedQuantities[qty.name] += qty.quantity || 0;
+                        }
                     }
                 }
-            }
 
-            result.set(id, aggregatedQuantities);
+                result.set(variantKey, aggregatedQuantities);
+            }
         });
 
         return result;
@@ -589,6 +614,91 @@ export class ProductService {
 		// Use Map for O(1) lookup instead of O(n) loop
 		const imagesMap = new Map(images.map((img: any) => [img.id, img.src]));
 		return (imagesMap.get(variantId) as string) || '';
+	}
+
+
+	async getInventoryLevelByProductId( store: string, productId: string ): Promise<any> {
+
+		console.log(`[getInventoryLevelByProductId] Starting to fetch inventory level for product: ${productId}`);
+		const shop = await this.getShop(store);
+		if (!shop) {
+			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
+		}
+
+		const accessToken = shop.accessToken as string;
+
+		const query = `
+            query {
+                product(id: "gid://shopify/Product/${productId}") {
+                    id
+                    title
+                    variants(first: 100) {
+                        edges {
+                            node {
+                                id
+                                title
+                                sku
+                                inventoryItem {
+                                    id
+                                    inventoryLevels(first: 10) {
+                                        edges {
+                                            node {
+                                                id
+                                                quantities(names: ["available", "incoming", "committed", "on_hand"]) {
+                                                    name
+                                                    quantity
+                                                }
+                                                location {
+                                                    id
+                                                    name
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        `;
+
+		try {
+			const resp = await lastValueFrom(
+				this.httpService.post(
+					`https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
+					{ query },
+					{ 
+						headers: { 
+							'X-Shopify-Access-Token': accessToken, 
+							'Content-Type': 'application/json' 
+						} 
+					}
+				)
+			);
+
+			// Log full response for debugging
+			console.log(`[getInventoryLevelByProductId] Full response:`, JSON.stringify(resp.data, null, 2));
+
+			// Check for GraphQL errors
+			if (resp.data?.errors) {
+				console.error(`[getInventoryLevelByProductId] GraphQL errors:`, resp.data.errors);
+				throw new Error(`GraphQL errors: ${JSON.stringify(resp.data.errors)}`);
+			}
+
+			const data = resp.data?.data?.product;
+			
+			if (!data) {
+				console.warn(`[getInventoryLevelByProductId] Product ${productId} not found or has no data`);
+				return null;
+			}
+
+			console.log(`[getInventoryLevelByProductId] Inventory level for product: ${productId}`, data);
+			return data;
+		} catch (error) {
+			console.error(`[getInventoryLevelByProductId] Error fetching inventory level:`, error);
+			throw error;
+		}
 	}
 
 }
