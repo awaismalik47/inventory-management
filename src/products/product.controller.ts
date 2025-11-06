@@ -18,6 +18,7 @@ export class ProductController {
     async getTotalProducts(@Query() query: { store?: string }): Promise<any> {
         return this.productService.getTotalProducts( query.store ?? '' );
     }
+    
 
     @Get('inventory')
     async getInventory(@Query() query: { store?: string, productId?: string }): Promise<any> {

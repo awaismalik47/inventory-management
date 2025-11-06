@@ -7,6 +7,13 @@ import { IProductModel, IVariantModel } from 'src/models/product.model';
 
 @Injectable()
 export class ProductService {
+    // Rate limiting configuration
+    private readonly MAX_RETRIES = 5;
+    private readonly INITIAL_RETRY_DELAY = 2000; // 2 seconds (increased)
+    private readonly MAX_RETRY_DELAY = 60000; // 60 seconds (increased)
+    private readonly RATE_LIMIT_DELAY = 1000; // 1 second between requests (increased from 500ms)
+    private readonly POST_THROTTLE_DELAY = 5000; // 5 seconds delay after throttling error
+
     constructor(
         private readonly httpService: HttpService,
         private readonly shopService: ShopService
@@ -14,6 +21,137 @@ export class ProductService {
 
 	private async getShop(store: string): Promise<any> {
 		return await this.shopService.findByShop(store);
+	}
+
+	/**
+	 * Make a GraphQL request with retry logic and rate limiting
+	 * Handles Shopify throttling errors with exponential backoff
+	 */
+	private async makeGraphQLRequest(
+		url: string,
+		query: string,
+		variables: any,
+		accessToken: string,
+		retryCount = 0
+	): Promise<any> {
+		try {
+			// Add delay before each request to respect rate limits
+			// Longer delay for retries to give Shopify time to recover
+			if (retryCount > 0) {
+				await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_DELAY * 2));
+			} else {
+				await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_DELAY));
+			}
+
+			const resp = await lastValueFrom(
+				this.httpService.post(
+					url,
+					{ query, variables },
+					{ 
+						headers: { 
+							'X-Shopify-Access-Token': accessToken, 
+							'Content-Type': 'application/json' 
+						} 
+					}
+				)
+			);
+
+			// Check for GraphQL errors
+			if (resp.data?.errors) {
+				const errors = resp.data.errors;
+				
+				// Check if it's a throttling error
+				const throttledError = errors.find((err: any) => 
+					err.extensions?.code === 'THROTTLED' || 
+					err.message?.toLowerCase().includes('throttled')
+				);
+
+				if (throttledError && retryCount < this.MAX_RETRIES) {
+					// Calculate exponential backoff delay
+					const delay = Math.min(
+						this.INITIAL_RETRY_DELAY * Math.pow(2, retryCount),
+						this.MAX_RETRY_DELAY
+					);
+
+					// Check if Shopify provided a retry-after value
+					// Headers can be in different cases
+					const retryAfter = resp.headers?.['retry-after'] || 
+									  resp.headers?.['Retry-After'] ||
+									  resp.headers?.['x-shopify-retry-after'] ||
+									  resp.headers?.['X-Shopify-Retry-After'];
+					// Use retry-after if provided, otherwise use exponential backoff
+					// Add extra buffer time to be safe
+					const waitTime = retryAfter 
+						? (parseInt(String(retryAfter)) * 1000) + 1000 // Add 1 second buffer
+						: delay;
+
+					console.log(
+						`[makeGraphQLRequest] Throttled. Retrying in ${waitTime}ms (attempt ${retryCount + 1}/${this.MAX_RETRIES})`
+					);
+
+					await new Promise(resolve => setTimeout(resolve, waitTime));
+					return this.makeGraphQLRequest(url, query, variables, accessToken, retryCount + 1);
+				}
+
+				// If not throttled or max retries reached, throw the error
+				throw new Error(`GraphQL errors: ${JSON.stringify(errors)}`);
+			}
+
+			// Check rate limit headers for logging and dynamic adjustment
+			// Headers can be in different cases, so check both
+			const rateLimitHeader = resp.headers?.['x-shopify-shop-api-call-limit'] || 
+									resp.headers?.['X-Shopify-Shop-Api-Call-Limit'];
+			if (rateLimitHeader) {
+				const [used, limit] = String(rateLimitHeader).split('/').map(Number);
+				const usagePercent = (used / limit) * 100;
+				
+				if (usagePercent > 90) {
+					console.error(
+						`[makeGraphQLRequest] CRITICAL: Rate limit nearly exhausted: ${used}/${limit} (${usagePercent.toFixed(1)}%)`
+					);
+					// Add extra delay if we're very close to the limit
+					await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_DELAY * 2));
+				} else if (usagePercent > 80) {
+					console.warn(
+						`[makeGraphQLRequest] Rate limit warning: ${used}/${limit} (${usagePercent.toFixed(1)}%)`
+					);
+					// Add moderate delay if we're approaching the limit
+					await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_DELAY));
+				} else if (usagePercent > 60) {
+					// Log info for monitoring
+					console.log(
+						`[makeGraphQLRequest] Rate limit: ${used}/${limit} (${usagePercent.toFixed(1)}%)`
+					);
+				}
+			}
+
+			return resp.data;
+		} catch (error: any) {
+			// Handle HTTP errors (429 Too Many Requests)
+			if (error.response?.status === 429 && retryCount < this.MAX_RETRIES) {
+				// Headers can be in different cases
+				const retryAfter = error.response.headers?.['retry-after'] || 
+								  error.response.headers?.['Retry-After'] ||
+								  error.response.headers?.['x-shopify-retry-after'] ||
+								  error.response.headers?.['X-Shopify-Retry-After'];
+				const delay = retryAfter 
+					? parseInt(String(retryAfter)) * 1000 
+					: Math.min(
+						this.INITIAL_RETRY_DELAY * Math.pow(2, retryCount),
+						this.MAX_RETRY_DELAY
+					);
+
+				console.log(
+					`[makeGraphQLRequest] HTTP 429. Retrying in ${delay}ms (attempt ${retryCount + 1}/${this.MAX_RETRIES})`
+				);
+
+				await new Promise(resolve => setTimeout(resolve, delay));
+				return this.makeGraphQLRequest(url, query, variables, accessToken, retryCount + 1);
+			}
+
+			// Re-throw if it's not a throttling issue or max retries reached
+			throw error;
+		}
 	}
 
 	async  getTotalProducts( store: string ) {
@@ -103,15 +241,14 @@ export class ProductService {
 			  }
 			`;
 	  
-			const resp = await lastValueFrom(
-			  this.httpService.post(
+			const resp = await this.makeGraphQLRequest(
 				`https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
-				{ query, variables: { first, after: afterCursor } },
-				{ headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' } }
-			  )
+				query,
+				{ first, after: afterCursor },
+				accessToken
 			);
 	  
-			const productsData = resp.data?.data?.products;
+			const productsData = resp?.data?.products;
 
 			console.log(productsData);
 			hasNextPage = productsData?.pageInfo?.hasNextPage || false;
@@ -232,15 +369,14 @@ export class ProductService {
 				  }
 				`;
 		  
-				const resp = await lastValueFrom(
-				  this.httpService.post(
+				const resp = await this.makeGraphQLRequest(
 					`https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
-					{ query, variables: { first, after: afterCursor } },
-					{ headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' } }
-				  )
+					query,
+					{ first, after: afterCursor },
+					accessToken
 				);
 		  
-				const productsData = resp.data?.data?.products;
+				const productsData = resp?.data?.products;
 				const edges = productsData?.edges || [];
 		  
 				const products = edges.map((e: any) => {
@@ -284,10 +420,11 @@ export class ProductService {
 		  
 				console.log(`[getAllProducts] Fetched page ${pageCount}: ${products.length} products (Total so far: ${allProducts.length})`);
 		  
-				// Reduced delay: Shopify GraphQL allows 50 cost points/second (250 products = ~50 points)
-				// 100ms delay allows ~10 requests/second, well within limits
+				// Add delay to respect rate limits
+				// Shopify GraphQL allows 50 cost points/second (250 products = ~50 points)
+				// Using RATE_LIMIT_DELAY to ensure we stay within limits
 				if (hasNextPage) {
-					await new Promise(resolve => setTimeout(resolve, 100));
+					await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_DELAY * 2));
 				}
 			}
 			
@@ -357,10 +494,10 @@ export class ProductService {
 
 
     private async fetchInventoryByProductsBatch(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
-        // Process in batches of 5 products to avoid GraphQL query size limits
-        // Using product-based queries (same structure as getInventoryLevelByProductId)
-        const batchSize = 5;
-        const maxConcurrent = 3; // Process 3 batches at a time
+        // Process in batches of 3 products to avoid GraphQL query size limits and rate limiting
+        // Reduced batch size and concurrency to better respect rate limits
+        const batchSize = 3;
+        const maxConcurrent = 2; // Process 2 batches at a time (reduced from 3)
         const result = new Map<string, any>();
         
         for (let i = 0; i < productIds.length; i += batchSize * maxConcurrent) {
@@ -386,9 +523,9 @@ export class ProductService {
                 }
             }
             
-            // Small delay between batch groups to avoid rate limiting
+            // Increased delay between batch groups to better respect rate limits
             if (i + (batchSize * maxConcurrent) < productIds.length) {
-                await new Promise(resolve => setTimeout(resolve, 100));
+                await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_DELAY * 3));
             }
         }
         
@@ -456,37 +593,59 @@ export class ProductService {
             throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
         }
 
-        // Process products in parallel batches to maintain performance
-        const batchSize = 5; // Process 5 products at a time
-        for (let i = 0; i < productIds.length; i += batchSize) {
-            const batch = productIds.slice(i, i + batchSize);
+        // Process products sequentially to better respect rate limits
+        // Reduced from parallel processing to avoid throttling
+        let consecutiveThrottles = 0;
+        for (let i = 0; i < productIds.length; i++) {
+            const productId = productIds[i];
             
-            // Fetch inventory for each product in the batch using the same method that works correctly
-            const batchPromises = batch.map(async (productId) => {
-                try {
-                    const productData = await this.getInventoryLevelByProductId(store, String(productId));
-                    if ( productData ) {
-                        const quantities = this.extractQuantitiesFromProductData(productId, productData);
-                        return quantities;
+            try {
+                const productData = await this.getInventoryLevelByProductId(store, String(productId));
+                if (productData) {
+                    const quantities = this.extractQuantitiesFromProductData(productId, productData);
+                    // Merge quantities into result
+                    for (const [key, value] of quantities.entries()) {
+                        result.set(key, value);
                     }
-                    return new Map<string, any>();
-                } catch (error: any) {
+                    // Reset throttle counter on success
+                    consecutiveThrottles = 0;
+                }
+            } catch (error: any) {
+                // Check if it's a throttling error
+                const isThrottled = error.message?.includes('THROTTLED') || 
+                                   error.message?.toLowerCase().includes('throttled') ||
+                                   error.response?.status === 429;
+                
+                if (isThrottled) {
+                    consecutiveThrottles++;
+                    console.warn(
+                        `[fetchInventoryByProducts] Throttled for product ${productId} (consecutive: ${consecutiveThrottles}). ` +
+                        `Retry logic exhausted. Adding extra delay before continuing...`
+                    );
+                    
+                    // If we're getting consecutive throttles, add extra delay
+                    if (consecutiveThrottles >= 2) {
+                        const extraDelay = this.POST_THROTTLE_DELAY * consecutiveThrottles;
+                        console.log(`[fetchInventoryByProducts] Adding ${extraDelay}ms delay due to consecutive throttles`);
+                        await new Promise(resolve => setTimeout(resolve, extraDelay));
+                    } else {
+                        await new Promise(resolve => setTimeout(resolve, this.POST_THROTTLE_DELAY));
+                    }
+                } else {
+                    // Reset on non-throttle error
+                    consecutiveThrottles = 0;
                     console.error(`[fetchInventoryByProducts] Error fetching inventory for product ${productId}:`, error.message);
-                    return new Map<string, any>(); // Return empty map on error, don't fail entire batch
                 }
-            });
-
-            // Wait for batch to complete and merge results
-            const batchResults = await Promise.all(batchPromises);
-            for (const batchResult of batchResults) {
-                for (const [key, value] of batchResult.entries()) {
-                    result.set(key, value);
-                }
+                // Continue with next product instead of failing entire batch
             }
 
-            // Small delay between batches to avoid rate limiting
-            if (i + batchSize < productIds.length) {
-                await new Promise(resolve => setTimeout(resolve, 100));
+            // Add delay between requests to respect rate limits (except for last product)
+            // Increase delay if we've had recent throttles
+            if (i < productIds.length - 1) {
+                const delay = consecutiveThrottles > 0 
+                    ? this.RATE_LIMIT_DELAY * 2 
+                    : this.RATE_LIMIT_DELAY;
+                await new Promise(resolve => setTimeout(resolve, delay));
             }
         }
 
@@ -600,25 +759,14 @@ export class ProductService {
         `;
 
 		try {
-			const resp = await lastValueFrom(
-				this.httpService.post(
-					`https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
-					{ query },
-					{ 
-						headers: { 
-							'X-Shopify-Access-Token': accessToken, 
-							'Content-Type': 'application/json' 
-						} 
-					}
-				)
+			const resp = await this.makeGraphQLRequest(
+				`https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
+				query,
+				{},
+				accessToken
 			);
 
-			// Check for GraphQL errors
-			if (resp.data?.errors) {
-				throw new Error(`GraphQL errors: ${JSON.stringify(resp.data.errors)}`);
-			}
-
-			const data = resp.data?.data?.product;
+			const data = resp?.data?.product;
 			
 			if (!data) {
 				return null;
