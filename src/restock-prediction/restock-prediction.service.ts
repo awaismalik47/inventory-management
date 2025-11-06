@@ -128,11 +128,11 @@ export class RestockPredictionService {
 			console.log(`[RestockPrediction] Received orders response: ${orders.length} orders`);
 			console.log(`[RestockPrediction] Fetched ${products.length} products and ${orders.length} orders`);
 
-			if (!products || products.length === 0) {
+			if ( !products || products.length === 0 ) {
 				console.warn(`[RestockPrediction] No products found for store: ${store}`);
 			}
 
-			if (!orders || orders.length === 0) {
+			if ( !orders || orders.length === 0 ) {
 				console.warn(`[RestockPrediction] No orders found for store: ${store}`);
 			}
 
@@ -214,8 +214,8 @@ export class RestockPredictionService {
 			perDaySales: 0
 		};
 		
-		for (const product of products) {
-			for (const variant of product.variants) {
+		for ( const product of products ) {
+			for ( const variant of product.variants ) {
 				const shortRangeData = shortRangeSales.get(variant.id) || defaultSalesData;
 				const longRangeData  = longRangeSales.get(variant.id) || defaultSalesData;
 				
@@ -241,12 +241,9 @@ export class RestockPredictionService {
 			: predictions;
 
 		return filteredPredictions.sort(
-			(a, b) => this.urgencyPriority[b.urgencyLevel] - this.urgencyPriority[a.urgencyLevel]
+			( a, b) => this.urgencyPriority[b.urgencyLevel] - this.urgencyPriority[a.urgencyLevel]
 		);
 	}
-
-
-	// Removed findSalesData - now using Map.get() directly in generatePredictions
 
 
 	// Create a complete prediction for a variant
@@ -293,11 +290,11 @@ export class RestockPredictionService {
 
 
 	// Calculate how much to restock based on sales velocity and current inventory
-	private calculateRestockQuantity(perDaySales: number, predictionDays: number, incomingStock: number): number {
+	private calculateRestockQuantity( perDaySales: number, predictionDays: number, incomingStock: number ): number {
 		const expectedSales  = perDaySales * predictionDays;
-		const restockNeeded  = Math.max(0, expectedSales - incomingStock);
+		const restockNeeded  = expectedSales - incomingStock;
 		
-		return Math.ceil( restockNeeded ); // Round up to avoid stockouts
+		return restockNeeded;
 	}
 
 
@@ -307,15 +304,5 @@ export class RestockPredictionService {
 		if ( recommendedAverageStock >= 10 ) return UrgencyLevelEnum.High;
 		if ( recommendedAverageStock >= 5 )  return UrgencyLevelEnum.Medium;
 		return UrgencyLevelEnum.Low;
-	}
-
-
-	async getProducts( store: string, limit: string = '50' ): Promise<any> {
-		return await this.productService.getProducts(store, limit);
-	}
-
-
-	async getOrders( store: string, limit: string = '50' ): Promise<any> {
-		return await this.orderService.getOrders(store, limit);
 	}
 }

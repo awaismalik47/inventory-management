@@ -269,19 +269,17 @@ export class ProductService {
 				}));
 	  
 				const variants = (p.variants?.edges || []).map((ve: any) => {
-				  const v = ve.node;
-				  return {
-					id: this.extractId(v.id),
-					title: v.title,
-					price: v.price,
-					sku: v.sku,
-					inventory_quantity: Number(v.inventoryQuantity ?? 0),
-					image_id: v.image ? this.extractId(v.image.id) : null,
-					product_id: productId,
-					inventory_item_id: v.inventoryItem
-					  ? this.extractId(v.inventoryItem.id)
-					  : null,
-				  };
+					const v = ve.node;
+					return {
+						id                : this.extractId(v.id),
+						title             : v.title,
+						price             : v.price,
+						sku               : v.sku,
+						inventory_quantity: Number(v.inventoryQuantity ?? 0),
+						image_id          : v.image ? this.extractId(v.image.id): null,
+						product_id        : productId,
+						inventory_item_id : v.inventoryItem ? this.extractId( v.inventoryItem.id ) : null,
+					};
 				});
 	  
 				return {
@@ -588,10 +586,10 @@ export class ProductService {
 
         const variants = productData.variants?.edges || [];
 
-        for (const variantEdge of variants) {
-            const variant = variantEdge.node;
-            const variantId = this.extractId(variant.id);
-            const variantKey = `${productId}_${variantId}`;
+        for ( const variantEdge of variants ) {
+			const variant = variantEdge.node;
+			const variantId = this.extractId(variant.id);
+			const variantKey = `${productId}_${variantId}`;
 
             const inventoryItem = variant.inventoryItem;
             if (!inventoryItem) {
@@ -608,10 +606,10 @@ export class ProductService {
                 on_hand: 0
             };
 
-            for (const level of inventoryLevels) {
+            for ( const level of inventoryLevels ) {
                 const quantities = level.node.quantities || [];
-                for (const qty of quantities) {
-                    if (qty.name in aggregatedQuantities) {
+                for ( const qty of quantities ) {
+                    if ( qty.name in aggregatedQuantities ) {
                         aggregatedQuantities[qty.name] += qty.quantity || 0;
                     }
                 }
