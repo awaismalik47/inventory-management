@@ -28,9 +28,6 @@ export class AppRegistrationService {
 
             await this.shopService.upsertShop({ shop: dto.shop, accessToken: dto.accessToken, installedByUserId: userId });
             
-            // Clear cached shop data to ensure fresh access token is used
-            this.productService.clearShopCache(dto.shop);
-            
             // // Register webhooks after saving shop data
             // try {
             //     await this.webhooksService.registerAllWebHooks(dto.shop, dto.accessToken);

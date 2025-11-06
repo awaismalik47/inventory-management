@@ -11,7 +11,6 @@ export interface IProductModel {
     productType: string;
     status     : string;
     variants   : IVariantModel[];
-    options    : IOptionModel[];
     imageUrl   : string;
 }
 
@@ -31,11 +30,4 @@ export interface IVariantModel {
     incoming?             : number;
     on_hand?              : number;
     committed?            :  number;
-}
-
-export interface IOptionModel {
-    id       : number;
-    productId: number;
-    name     : string;
-    values   : string[];
 }

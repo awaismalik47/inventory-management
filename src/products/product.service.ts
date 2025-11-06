@@ -2,11 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
 import { ShopService } from 'src/shop/shop.service';
-import { IOptionModel, IProductModel, IVariantModel } from 'src/models/product.model';
-
-// Simple in-memory cache
-const shopCache = new Map<string, { data: any; timestamp: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+import { IProductModel, IVariantModel } from 'src/models/product.model';
 
 
 @Injectable()
@@ -16,32 +12,8 @@ export class ProductService {
         private readonly shopService: ShopService
     ) {}
 
-    /**
-     * Clear cached shop data for a specific store
-     * This should be called when access tokens are updated
-     */
-    clearShopCache(store: string): void {
-        const cacheKey = `shop_${store}`;
-        shopCache.delete(cacheKey);
-    }
-
-    /**
-     * Clear all cached shop data
-     * This can be called during logout or when needed
-     */
-    clearAllShopCache(): void {
-        shopCache.clear();
-    }
-
-
 	private async getShop(store: string): Promise<any> {
-		const cacheKey = `shop_${store}`;
-		let shop = shopCache.get(cacheKey)?.data;
-		if (!shop || Date.now() - (shopCache.get(cacheKey)?.timestamp || 0) > CACHE_TTL) {
-			shop = await this.shopService.findByShop(store);
-			if (shop) shopCache.set(cacheKey, { data: shop, timestamp: Date.now() });
-		}
-		return shop;
+		return await this.shopService.findByShop(store);
 	}
 
 	async  getTotalProducts( store: string ) {
@@ -107,7 +79,6 @@ export class ProductService {
 					  status
 					  featuredImage { url }
 					  images(first: 100) { edges { node { id url } } }
-					  options { id name values }
 					  variants(first: 100) {
 						edges {
 						  node {
@@ -176,13 +147,6 @@ export class ProductService {
 				  };
 				});
 	  
-				const options = (p.options || []).map((o: any) => ({
-				  id: this.extractId(o.id),
-				  product_id: productId,
-				  name: o.name,
-				  values: o.values,
-				}));
-	  
 				return {
 				  id: productId,
 				  title: p.title,
@@ -191,7 +155,6 @@ export class ProductService {
 				  image: { src: p.featuredImage?.url || images[0]?.src || '' },
 				  images,
 				  variants,
-				  options,
 				};
 			  });
 	  
@@ -245,7 +208,6 @@ export class ProductService {
 						  status
 						  featuredImage { url }
 						  images(first: 100) { edges { node { id url } } }
-						  options { id name values }
 						  variants(first: 100) {
 							edges {
 							  node {
@@ -304,13 +266,6 @@ export class ProductService {
 						};
 					});
 		  
-					const options = (p.options || []).map((o: any) => ({
-						id        : this.extractId(o.id),
-						product_id: productId,
-						name      : o.name,
-						values    : o.values,
-					}));
-		  
 					return {
 					  id          : productId,
 					  title       : p.title,
@@ -319,7 +274,6 @@ export class ProductService {
 					  image       : { src: p.featuredImage?.url || images[0]?.src || '' },
 					  images,
 					  variants,
-					  options,
 					};
 				});
 		  
@@ -495,7 +449,6 @@ export class ProductService {
      * This ensures accurate quantities by using the exact same query structure
      */
     private async fetchInventoryByProducts(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
-        console.log(`[fetchInventoryByProducts] Fetching inventory for ${productIds.length} products using getInventoryLevelByProductId method:`, productIds);
         
         const result = new Map<string, any>();
         const shop = await this.getShop(store);
@@ -512,7 +465,7 @@ export class ProductService {
             const batchPromises = batch.map(async (productId) => {
                 try {
                     const productData = await this.getInventoryLevelByProductId(store, String(productId));
-                    if (productData) {
+                    if ( productData ) {
                         const quantities = this.extractQuantitiesFromProductData(productId, productData);
                         return quantities;
                     }
@@ -537,7 +490,6 @@ export class ProductService {
             }
         }
 
-        console.log(`[fetchInventoryByProducts] Successfully fetched inventory for ${result.size} variants from ${productIds.length} products`);
         return result;
     }
 	
@@ -554,7 +506,6 @@ export class ProductService {
 				productType: product.product_type,
 				status     : product.status,
 				variants   : this.getVariantsModel( product.variants, product.images ),
-				options    : this.getOptionsModel( product.options ),
 				imageUrl   : product.image.src,
 			};
 
@@ -590,23 +541,6 @@ export class ProductService {
 	}
 
 
-	private getOptionsModel( options: any ): IOptionModel[] {
-		if ( !options ) return [];
-		const optionsModel: IOptionModel[] = [];
-
-		for ( const option of options ) {
-			const model: IOptionModel = {
-				id       : option.id as number,
-				productId: option.product_id as number,
-				name     : option.name,
-				values   : option.values,
-			};
-			optionsModel.push( model );
-		}
-		return optionsModel;
-	}
-
-
 	private extractId(gid: string): number {
 		return Number(String(gid).split('/').pop());
 	}
@@ -622,7 +556,6 @@ export class ProductService {
 
 	async getInventoryLevelByProductId( store: string, productId: string ): Promise<any> {
 
-		console.log(`[getInventoryLevelByProductId] Starting to fetch inventory level for product: ${productId}`);
 		const shop = await this.getShop(store);
 		if (!shop) {
 			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
@@ -680,26 +613,19 @@ export class ProductService {
 				)
 			);
 
-			// Log full response for debugging
-			console.log(`[getInventoryLevelByProductId] Full response:`, JSON.stringify(resp.data, null, 2));
-
 			// Check for GraphQL errors
 			if (resp.data?.errors) {
-				console.error(`[getInventoryLevelByProductId] GraphQL errors:`, resp.data.errors);
 				throw new Error(`GraphQL errors: ${JSON.stringify(resp.data.errors)}`);
 			}
 
 			const data = resp.data?.data?.product;
 			
 			if (!data) {
-				console.warn(`[getInventoryLevelByProductId] Product ${productId} not found or has no data`);
 				return null;
 			}
 
-			console.log(`[getInventoryLevelByProductId] Inventory level for product: ${productId}`, data);
 			return data;
 		} catch (error) {
-			console.error(`[getInventoryLevelByProductId] Error fetching inventory level:`, error);
 			throw error;
 		}
 	}
