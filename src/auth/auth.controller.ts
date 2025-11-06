@@ -118,9 +118,6 @@ export class AuthController {
             
             await this.shopService.upsertShop( shopData as any );
             
-            // Clear cached shop data to ensure fresh access token is used
-            this.productService.clearShopCache(shopDomain);
-            
             // // Register webhooks after successful OAuth
             // try {
             //     await this.webhooksService.registerAllWebHooks(shopDomain, response.data.access_token);
