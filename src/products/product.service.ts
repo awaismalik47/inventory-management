@@ -316,7 +316,7 @@ export class ProductService {
 	  }
 
 
-	async getAllProducts(store: string): Promise<any> {
+	async getAllProducts(store: string, skipInventoryFetch: boolean = false): Promise<any> {
 		const shop = await this.getShop(store);
 		if (!shop) {
 			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
@@ -430,8 +430,26 @@ export class ProductService {
 			
 			console.log(`[getAllProducts] Completed fetching all products. Total products: ${allProducts.length}`);
 		  
-			// Fetch inventory for all products
-			const productsWithInventory = await this.fetchInventoryForProducts(allProducts, store, accessToken);
+			// Fetch inventory for all products (or use basic inventoryQuantity if skipped)
+			let productsWithInventory: any[];
+			if (skipInventoryFetch) {
+				console.log(`[getAllProducts] Skipping detailed inventory fetch. Using basic inventoryQuantity from product data.`);
+				// Use inventoryQuantity as available, set incoming to 0
+				productsWithInventory = allProducts.map(product => ({
+					...product,
+					variants: product.variants.map((variant: any) => ({
+						...variant,
+						available: variant.inventory_quantity || 0,
+						incoming: 0,
+						committed: 0,
+						on_hand: variant.inventory_quantity || 0,
+					}))
+				}));
+			} else {
+				console.log(`[getAllProducts] Starting to fetch inventory for ${allProducts.length} products...`);
+				productsWithInventory = await this.fetchInventoryForProducts(allProducts, store, accessToken);
+				console.log(`[getAllProducts] Completed fetching inventory for all products`);
+			}
 		  
 			return {
 				products: this.getAllProductsModel({ products: productsWithInventory }),
@@ -445,6 +463,8 @@ export class ProductService {
 
 
     private async fetchInventoryForProducts( products: any[], store: string, accessToken: string ): Promise<any[]> {
+        
+        console.log(`[fetchInventoryForProducts] Starting inventory fetch for ${products.length} products`);
         
         // Collect product IDs and create variant mapping
         const productIds: number[] = [];
@@ -467,12 +487,17 @@ export class ProductService {
         }
         
         if ( productIds.length === 0 ) {
+            console.log(`[fetchInventoryForProducts] No product IDs found, returning products without inventory`);
             return products;
         }
+        
+        console.log(`[fetchInventoryForProducts] Processing ${productIds.length} products in batches...`);
         
         // Batch fetch inventory data using product-based queries (same as getInventoryLevelByProductId)
         try {
             const inventoryData = await this.fetchInventoryByProductsBatch(productIds, store, accessToken);
+            
+            console.log(`[fetchInventoryForProducts] Fetched inventory data for ${inventoryData.size} variants`);
             
             // Apply inventory data to variants
             for (const [variantKey, data] of inventoryData.entries()) {
@@ -484,8 +509,11 @@ export class ProductService {
                     variant.on_hand = data.on_hand || 0;
                 }
             }
-        } catch (error) {
-			throw new UnauthorizedException(error.message);
+            
+            console.log(`[fetchInventoryForProducts] Applied inventory data to variants`);
+        } catch (error: any) {
+            console.error(`[fetchInventoryForProducts] Error fetching inventory:`, error.message);
+            throw new UnauthorizedException(error.message);
             // Default values are already set above
         }
         
@@ -499,8 +527,17 @@ export class ProductService {
         const batchSize = 3;
         const maxConcurrent = 2; // Process 2 batches at a time (reduced from 3)
         const result = new Map<string, any>();
+        const totalBatches = Math.ceil(productIds.length / (batchSize * maxConcurrent));
+        let currentBatchGroup = 0;
+        
+        console.log(`[fetchInventoryByProductsBatch] Processing ${productIds.length} products in ${totalBatches} batch groups (${batchSize} products per batch, ${maxConcurrent} concurrent batches)`);
         
         for (let i = 0; i < productIds.length; i += batchSize * maxConcurrent) {
+            currentBatchGroup++;
+            const processedCount = Math.min(i + (batchSize * maxConcurrent), productIds.length);
+            
+            console.log(`[fetchInventoryByProductsBatch] Processing batch group ${currentBatchGroup}/${totalBatches} (products ${i + 1}-${processedCount} of ${productIds.length})`);
+            
             // Create batches for parallel processing
             const batchPromises: Promise<Map<string, any>>[] = [];
             
@@ -517,11 +554,15 @@ export class ProductService {
             const batchResults = await Promise.all(batchPromises);
             
             // Merge results
+            let variantsInThisGroup = 0;
             for (const batchResult of batchResults) {
                 for (const [key, data] of batchResult.entries()) {
                     result.set(key, data);
+                    variantsInThisGroup++;
                 }
             }
+            
+            console.log(`[fetchInventoryByProductsBatch] Completed batch group ${currentBatchGroup}/${totalBatches} (${variantsInThisGroup} variants processed, ${result.size} total variants so far)`);
             
             // Increased delay between batch groups to better respect rate limits
             if (i + (batchSize * maxConcurrent) < productIds.length) {
@@ -529,6 +570,7 @@ export class ProductService {
             }
         }
         
+        console.log(`[fetchInventoryByProductsBatch] Completed all batch groups. Total variants processed: ${result.size}`);
         return result;
     }
 
@@ -619,7 +661,7 @@ export class ProductService {
                 if (isThrottled) {
                     consecutiveThrottles++;
                     console.warn(
-                        `[fetchInventoryByProducts] Throttled for product ${productId} (consecutive: ${consecutiveThrottles}). ` +
+                        `[fetchInventoryByProducts] Throttled for product ${productId} (${i + 1}/${productIds.length}, consecutive: ${consecutiveThrottles}). ` +
                         `Retry logic exhausted. Adding extra delay before continuing...`
                     );
                     
@@ -634,7 +676,7 @@ export class ProductService {
                 } else {
                     // Reset on non-throttle error
                     consecutiveThrottles = 0;
-                    console.error(`[fetchInventoryByProducts] Error fetching inventory for product ${productId}:`, error.message);
+                    console.error(`[fetchInventoryByProducts] Error fetching inventory for product ${productId} (${i + 1}/${productIds.length}):`, error.message);
                 }
                 // Continue with next product instead of failing entire batch
             }

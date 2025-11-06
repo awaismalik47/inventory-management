@@ -89,16 +89,21 @@ export class RestockPredictionService {
 			
 			// Fetch products and orders in parallel since they're independent
 			// Note: getAllProducts throws exceptions, getAllOrders returns error objects
+			// Skip detailed inventory fetch for faster processing - use basic inventoryQuantity instead
+			console.log(`[RestockPrediction] Starting parallel fetch of products and orders...`);
+			console.log(`[RestockPrediction] Using fast mode: skipping detailed inventory fetch (using basic inventoryQuantity)`);
 			const [productsResponse, ordersResponse] = await Promise.all([
-				this.productService.getAllProducts( store ).catch(err => {
-					console.error(`[RestockPrediction] Error fetching products:`, err.message);
+				this.productService.getAllProducts( store, true ).catch(err => {
+					console.error(`[RestockPrediction] Error fetching products:`, err.message, err.stack);
 					return { error: err.message, products: null };
 				}),
 				this.orderService.getAllOrders( store ).catch(err => {
-					console.error(`[RestockPrediction] Error fetching orders:`, err.message);
+					console.error(`[RestockPrediction] Error fetching orders:`, err.message, err.stack);
 					return { error: err.message, orders: null };
 				})
 			]);
+			
+			console.log(`[RestockPrediction] Completed parallel fetch. Products response received: ${!!productsResponse}, Orders response received: ${!!ordersResponse}`);
 
 			// Check for errors in responses
 			if ( productsResponse?.error ) {
@@ -119,6 +124,8 @@ export class RestockPredictionService {
 			// If orders failed, use empty array so predictions can still be generated
 			const orders = ordersResponse?.error ? [] : (ordersResponse?.orders || []);
 			
+			console.log(`[RestockPrediction] Received products response: ${products.length} products`);
+			console.log(`[RestockPrediction] Received orders response: ${orders.length} orders`);
 			console.log(`[RestockPrediction] Fetched ${products.length} products and ${orders.length} orders`);
 
 			if (!products || products.length === 0) {
