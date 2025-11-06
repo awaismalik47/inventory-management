@@ -357,42 +357,9 @@ export class ProductService {
 
 
     private async fetchInventoryByProductsBatch(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
-        // Process in batches of 5 products to avoid GraphQL query size limits
-        // Using product-based queries (same structure as getInventoryLevelByProductId)
-        const batchSize = 5;
-        const maxConcurrent = 3; // Process 3 batches at a time
-        const result = new Map<string, any>();
-        
-        for (let i = 0; i < productIds.length; i += batchSize * maxConcurrent) {
-            // Create batches for parallel processing
-            const batchPromises: Promise<Map<string, any>>[] = [];
-            
-            for (let j = 0; j < maxConcurrent && (i + j * batchSize) < productIds.length; j++) {
-                const batchStart = i + j * batchSize;
-                const batch = productIds.slice(batchStart, batchStart + batchSize);
-                
-                if (batch.length > 0) {
-                    batchPromises.push(this.fetchInventoryByProducts(batch, store, accessToken));
-                }
-            }
-            
-            // Wait for all batches in this group to complete
-            const batchResults = await Promise.all(batchPromises);
-            
-            // Merge results
-            for (const batchResult of batchResults) {
-                for (const [key, data] of batchResult.entries()) {
-                    result.set(key, data);
-                }
-            }
-            
-            // Small delay between batch groups to avoid rate limiting
-            if (i + (batchSize * maxConcurrent) < productIds.length) {
-                await new Promise(resolve => setTimeout(resolve, 100));
-            }
-        }
-        
-        return result;
+        // fetchInventoryByProducts now processes sequentially with rate limiting
+        // No need for additional batching - just pass all product IDs
+        return await this.fetchInventoryByProducts(productIds, store, accessToken);
     }
 
 
@@ -445,8 +412,45 @@ export class ProductService {
     }
 
     /**
+     * Retry helper with exponential backoff for handling rate limits
+     */
+    private async retryWithBackoff<T>(
+        fn: () => Promise<T>,
+        maxRetries: number = 3,
+        initialDelay: number = 1000
+    ): Promise<T> {
+        let lastError: any;
+        
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                return await fn();
+            } catch (error: any) {
+                lastError = error;
+                
+                // Check if it's a throttling error
+                const isThrottled = error?.message?.includes('Throttled') || 
+                                   error?.response?.data?.errors?.some((e: any) => e.extensions?.code === 'THROTTLED');
+                
+                if (isThrottled && attempt < maxRetries - 1) {
+                    // Exponential backoff: 1s, 2s, 4s
+                    const delay = initialDelay * Math.pow(2, attempt);
+                    console.log(`[retryWithBackoff] Throttled, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                }
+                
+                // If not throttled or max retries reached, throw
+                throw error;
+            }
+        }
+        
+        throw lastError;
+    }
+
+    /**
      * Fetch inventory for multiple products using the same method as getInventoryLevelByProductId
      * This ensures accurate quantities by using the exact same query structure
+     * Processes sequentially to avoid rate limiting
      */
     private async fetchInventoryByProducts(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
         
@@ -456,37 +460,43 @@ export class ProductService {
             throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
         }
 
-        // Process products in parallel batches to maintain performance
-        const batchSize = 5; // Process 5 products at a time
-        for (let i = 0; i < productIds.length; i += batchSize) {
-            const batch = productIds.slice(i, i + batchSize);
+        // Process products sequentially to avoid rate limiting
+        // Shopify GraphQL API allows ~50 cost points/second, each product query is ~10-15 points
+        // Processing sequentially with delays ensures we stay within limits
+        for (let i = 0; i < productIds.length; i++) {
+            const productId = productIds[i];
             
-            // Fetch inventory for each product in the batch using the same method that works correctly
-            const batchPromises = batch.map(async (productId) => {
-                try {
-                    const productData = await this.getInventoryLevelByProductId(store, String(productId));
-                    if ( productData ) {
-                        const quantities = this.extractQuantitiesFromProductData(productId, productData);
-                        return quantities;
+            try {
+                // Use retry logic with exponential backoff for throttling
+                const productData = await this.retryWithBackoff(
+                    () => this.getInventoryLevelByProductId(store, String(productId)),
+                    3, // max 3 retries
+                    1000 // initial delay 1 second
+                );
+                
+                if (productData) {
+                    const quantities = this.extractQuantitiesFromProductData(productId, productData);
+                    for (const [key, value] of quantities.entries()) {
+                        result.set(key, value);
                     }
-                    return new Map<string, any>();
-                } catch (error: any) {
+                }
+            } catch (error: any) {
+                // Log error but continue processing other products
+                const isThrottled = error?.message?.includes('Throttled') || 
+                                   error?.response?.data?.errors?.some((e: any) => e.extensions?.code === 'THROTTLED');
+                
+                if (isThrottled) {
+                    console.error(`[fetchInventoryByProducts] Throttled for product ${productId} after retries. Skipping...`);
+                } else {
                     console.error(`[fetchInventoryByProducts] Error fetching inventory for product ${productId}:`, error.message);
-                    return new Map<string, any>(); // Return empty map on error, don't fail entire batch
                 }
-            });
-
-            // Wait for batch to complete and merge results
-            const batchResults = await Promise.all(batchPromises);
-            for (const batchResult of batchResults) {
-                for (const [key, value] of batchResult.entries()) {
-                    result.set(key, value);
-                }
+                // Continue with next product instead of failing entire batch
             }
 
-            // Small delay between batches to avoid rate limiting
-            if (i + batchSize < productIds.length) {
-                await new Promise(resolve => setTimeout(resolve, 100));
+            // Delay between requests to respect rate limits
+            // 500ms delay = ~2 requests/second = ~20-30 cost points/second (well within 50 limit)
+            if (i < productIds.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
 
@@ -615,7 +625,15 @@ export class ProductService {
 
 			// Check for GraphQL errors
 			if (resp.data?.errors) {
-				throw new Error(`GraphQL errors: ${JSON.stringify(resp.data.errors)}`);
+				const errors = resp.data.errors;
+				// Check if any error is a throttling error
+				const throttledError = errors.find((e: any) => e.extensions?.code === 'THROTTLED');
+				if (throttledError) {
+					const error: any = new Error(`GraphQL errors: ${JSON.stringify(errors)}`);
+					error.response = { data: { errors } };
+					throw error;
+				}
+				throw new Error(`GraphQL errors: ${JSON.stringify(errors)}`);
 			}
 
 			const data = resp.data?.data?.product;
@@ -625,7 +643,14 @@ export class ProductService {
 			}
 
 			return data;
-		} catch (error) {
+		} catch (error: any) {
+			// Re-throw with proper structure for retry logic
+			if (error?.response?.data?.errors) {
+				const throttledError = error.response.data.errors.find((e: any) => e.extensions?.code === 'THROTTLED');
+				if (throttledError) {
+					throw error;
+				}
+			}
 			throw error;
 		}
 	}
