@@ -276,8 +276,8 @@ export class RestockPredictionService {
 			recommendedAverageStock: Math.ceil(recommendedAverageStock),
 			
 			// Restock recommendations
-			recommendedRestockShortRange: this.calculateRestockQuantity( shortRange.perDaySales, predictionDays, availableStock, incomingStock ),
-			recommendedRestockLongRange: this.calculateRestockQuantity( longRange.perDaySales, predictionDays, availableStock, incomingStock ),
+			recommendedRestockShortRange: this.calculateRestockQuantity( shortRange.perDaySales, predictionDays, incomingStock ),
+			recommendedRestockLongRange: this.calculateRestockQuantity( longRange.perDaySales, predictionDays, incomingStock ),
 
 			// urgency level
 			urgencyLevel: this.calculateUrgencyLevel( recommendedAverageStock ),
@@ -286,10 +286,9 @@ export class RestockPredictionService {
 
 
 	// Calculate how much to restock based on sales velocity and current inventory
-	private calculateRestockQuantity(perDaySales: number, predictionDays: number, availableStock: number, incomingStock: number): number {
+	private calculateRestockQuantity(perDaySales: number, predictionDays: number, incomingStock: number): number {
 		const expectedSales  = perDaySales * predictionDays;
-		const totalInventory = availableStock + incomingStock;
-		const restockNeeded  = Math.max(0, expectedSales - totalInventory);
+		const restockNeeded  = Math.max(0, expectedSales - incomingStock);
 		
 		return Math.ceil( restockNeeded ); // Round up to avoid stockouts
 	}
