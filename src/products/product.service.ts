@@ -12,7 +12,28 @@ export class ProductService {
     private readonly INITIAL_RETRY_DELAY = 2000; // 2 seconds (increased)
     private readonly MAX_RETRY_DELAY = 60000; // 60 seconds (increased)
     private readonly RATE_LIMIT_DELAY = 1000; // 1 second between requests (increased from 500ms)
-    private readonly POST_THROTTLE_DELAY = 5000; // 5 seconds delay after throttling error
+	private readonly POST_THROTTLE_DELAY = 5000; // 5 seconds delay after throttling error
+	private readonly INVENTORY_BATCH_SIZE = 50;
+	private readonly INVENTORY_MAX_CONCURRENT_BATCHES = 2;
+	private readonly inventoryItemsQuery = `
+		query inventoryItems($ids: [ID!]!) {
+			nodes(ids: $ids) {
+				... on InventoryItem {
+					id
+					inventoryLevels(first: 10) {
+						edges {
+							node {
+								quantities(names: ["available", "incoming", "committed", "on_hand"]) {
+									name
+									quantity
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	`;
 
     constructor(
         private readonly httpService: HttpService,
@@ -401,13 +422,13 @@ export class ProductService {
 					});
 		  
 					return {
-					  id          : productId,
-					  title       : p.title,
-					  product_type: p.productType,
-					  status      : p.status,
-					  image       : { src: p.featuredImage?.url || images[0]?.src || '' },
-					  images,
-					  variants,
+						id          : productId,
+						title       : p.title,
+						product_type: p.productType,
+						status      : p.status,
+						image       : { src: p.featuredImage?.url || images[0]?.src || '' },
+						images,
+						variants,
 					};
 				});
 		  
@@ -437,15 +458,15 @@ export class ProductService {
 					...product,
 					variants: product.variants.map((variant: any) => ({
 						...variant,
-						available: variant.inventory_quantity || 0,
-						incoming: 0,
-						committed: 0,
-						on_hand: variant.inventory_quantity || 0,
+						available: variant.available_quantity || 0,
+						incoming: variant.incoming_quantity || 0,
+						committed: variant.committed_quantity || 0,
+						on_hand: variant.on_hand_quantity || 0,
 					}))
 				}));
 			} else {
 				console.log(`[getAllProducts] Starting to fetch inventory for ${allProducts.length} products...`);
-				productsWithInventory = await this.fetchInventoryForProducts(allProducts, store, accessToken);
+				productsWithInventory = await this.fetchInventoryForProducts( allProducts, store, accessToken );
 				console.log(`[getAllProducts] Completed fetching inventory for all products`);
 			}
 		  
@@ -464,13 +485,13 @@ export class ProductService {
         
         console.log(`[fetchInventoryForProducts] Starting inventory fetch for ${products.length} products`);
         
-        // Collect product IDs and create variant mapping
-        const productIds: number[] = [];
-        const variantMap = new Map<string, any>(); // key: "productId_variantId"
+		// Collect inventory item IDs and create variant mapping
+		const variantMap = new Map<string, any>(); // key: "productId_variantId"
+		const inventoryItemMap = new Map<number, string>(); // key: inventoryItemId -> variantKey
+		const inventoryItemIds: number[] = [];
         
         // Optimized: Single loop through all products and variants
         for (const product of products) {
-            productIds.push(product.id);
             for (const variant of product.variants) {
                 // Set default values first
                 variant.available = 0;
@@ -481,31 +502,41 @@ export class ProductService {
                 // Create a map key for this variant
                 const variantKey = `${product.id}_${variant.id}`;
                 variantMap.set(variantKey, variant);
+
+                if (variant.inventory_item_id) {
+                    const inventoryItemId = Number(variant.inventory_item_id);
+                    inventoryItemMap.set(inventoryItemId, variantKey);
+                    inventoryItemIds.push(inventoryItemId);
+                }
             }
         }
         
-        if ( productIds.length === 0 ) {
-            console.log(`[fetchInventoryForProducts] No product IDs found, returning products without inventory`);
+		const uniqueInventoryItemIds = Array.from(new Set(inventoryItemIds));
+
+		if ( uniqueInventoryItemIds.length === 0 ) {
+            console.log(`[fetchInventoryForProducts] No inventory item IDs found, returning products without inventory`);
             return products;
         }
         
-        console.log(`[fetchInventoryForProducts] Processing ${productIds.length} products in batches...`);
+		console.log(`[fetchInventoryForProducts] Processing ${uniqueInventoryItemIds.length} inventory items in batches...`);
         
-        // Batch fetch inventory data using product-based queries (same as getInventoryLevelByProductId)
+        // Batch fetch inventory data using inventory item based queries
         try {
-            const inventoryData = await this.fetchInventoryByProductsBatch(productIds, store, accessToken);
-            
-            console.log(`[fetchInventoryForProducts] Fetched inventory data for ${inventoryData.size} variants`);
-            
-            // Apply inventory data to variants
-            for (const [variantKey, data] of inventoryData.entries()) {
+			const inventoryData = await this.fetchInventoryByInventoryItems(uniqueInventoryItemIds, store, accessToken);
+
+            console.log(`[fetchInventoryForProducts] Fetched inventory data for ${inventoryData.size} inventory items`);
+
+            for (const [inventoryItemId, data] of inventoryData.entries()) {
+                const variantKey = inventoryItemMap.get(inventoryItemId);
+                if (!variantKey) continue;
+
                 const variant = variantMap.get(variantKey);
-                if (variant) {
-                    variant.available = data.available || 0;
-                    variant.incoming = data.incoming || 0;
-                    variant.committed = data.committed || 0;
-                    variant.on_hand = data.on_hand || 0;
-                }
+                if (!variant) continue;
+
+                variant.available = data.available || 0;
+                variant.incoming = data.incoming || 0;
+                variant.committed = data.committed || 0;
+                variant.on_hand = data.on_hand || 0;
             }
             
             console.log(`[fetchInventoryForProducts] Applied inventory data to variants`);
@@ -519,178 +550,111 @@ export class ProductService {
     }
 
 
-    private async fetchInventoryByProductsBatch(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
-        // Process in batches of 3 products to avoid GraphQL query size limits and rate limiting
-        // Reduced batch size and concurrency to better respect rate limits
-        const batchSize = 3;
-        const maxConcurrent = 2; // Process 2 batches at a time (reduced from 3)
-        const result = new Map<string, any>();
-        const totalBatches = Math.ceil(productIds.length / (batchSize * maxConcurrent));
-        let currentBatchGroup = 0;
-        
-        console.log(`[fetchInventoryByProductsBatch] Processing ${productIds.length} products in ${totalBatches} batch groups (${batchSize} products per batch, ${maxConcurrent} concurrent batches)`);
-        
-        for (let i = 0; i < productIds.length; i += batchSize * maxConcurrent) {
-            currentBatchGroup++;
-            const processedCount = Math.min(i + (batchSize * maxConcurrent), productIds.length);
-            
-            console.log(`[fetchInventoryByProductsBatch] Processing batch group ${currentBatchGroup}/${totalBatches} (products ${i + 1}-${processedCount} of ${productIds.length})`);
-            
-            // Create batches for parallel processing
-            const batchPromises: Promise<Map<string, any>>[] = [];
-            
-            for (let j = 0; j < maxConcurrent && (i + j * batchSize) < productIds.length; j++) {
-                const batchStart = i + j * batchSize;
-                const batch = productIds.slice(batchStart, batchStart + batchSize);
-                
-                if (batch.length > 0) {
-                    batchPromises.push(this.fetchInventoryByProducts(batch, store, accessToken));
-                }
-            }
-            
-            // Wait for all batches in this group to complete
-            const batchResults = await Promise.all(batchPromises);
-            
-            // Merge results
-            let variantsInThisGroup = 0;
-            for (const batchResult of batchResults) {
-                for (const [key, data] of batchResult.entries()) {
-                    result.set(key, data);
-                    variantsInThisGroup++;
-                }
-            }
-            
-            console.log(`[fetchInventoryByProductsBatch] Completed batch group ${currentBatchGroup}/${totalBatches} (${variantsInThisGroup} variants processed, ${result.size} total variants so far)`);
-            
-            // Increased delay between batch groups to better respect rate limits
-            if (i + (batchSize * maxConcurrent) < productIds.length) {
-                await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_DELAY * 3));
-            }
-        }
-        
-        console.log(`[fetchInventoryByProductsBatch] Completed all batch groups. Total variants processed: ${result.size}`);
-        return result;
-    }
+	private async fetchInventoryByInventoryItems(inventoryItemIds: number[], store: string, accessToken: string): Promise<Map<number, any>> {
+		const result = new Map<number, any>();
 
+		if (!inventoryItemIds.length) {
+			return result;
+		}
 
-    /**
-     * Extract inventory quantities from product data returned by getInventoryLevelByProductId
-     * This ensures we use the exact same data structure and aggregation logic
-     */
-    private extractQuantitiesFromProductData(productId: number, productData: any): Map<string, any> {
-        const result = new Map<string, any>();
-        
-        if (!productData || !productData.variants) {
-            return result;
-        }
+		const batches: number[][] = [];
+		for (let i = 0; i < inventoryItemIds.length; i += this.INVENTORY_BATCH_SIZE) {
+			batches.push(inventoryItemIds.slice(i, i + this.INVENTORY_BATCH_SIZE));
+		}
 
-        const variants = productData.variants?.edges || [];
+		const queue = [...batches];
+		let batchGroup = 0;
 
-        for ( const variantEdge of variants ) {
-			const variant = variantEdge.node;
-			const variantId = this.extractId(variant.id);
-			const variantKey = `${productId}_${variantId}`;
+		while (queue.length) {
+			batchGroup++;
+			const currentGroup = queue.splice(0, this.INVENTORY_MAX_CONCURRENT_BATCHES);
 
-            const inventoryItem = variant.inventoryItem;
-            if (!inventoryItem) {
-                continue;
-            }
+			const responses = await Promise.allSettled(
+				currentGroup.map(batch => this.fetchInventoryItemsBatch(batch, store, accessToken))
+			);
 
-            const inventoryLevels = inventoryItem.inventoryLevels?.edges || [];
-            
-            // Aggregate quantities across all locations (same logic as getInventoryLevelByProductId)
-            const aggregatedQuantities = {
-                available: 0,
-                incoming: 0,
-                committed: 0,
-                on_hand: 0
-            };
+			let throttled = false;
+			const retryBatches: number[][] = [];
 
-            for ( const level of inventoryLevels ) {
-                const quantities = level.node.quantities || [];
-                for ( const qty of quantities ) {
-                    if ( qty.name in aggregatedQuantities ) {
-                        aggregatedQuantities[qty.name] += qty.quantity || 0;
-                    }
-                }
-            }
+			responses.forEach((response, index) => {
+				const batch = currentGroup[index];
 
-            result.set(variantKey, aggregatedQuantities);
-        }
+				if (response.status === 'fulfilled') {
+					const dataMap = response.value;
+					for (const [key, value] of dataMap.entries()) {
+						result.set(key, value);
+					}
+					return;
+				}
 
-        return result;
-    }
+				const error: any = response.reason;
+				if (this.isThrottledError(error)) {
+					throttled = true;
+					retryBatches.push(batch);
+					console.warn(`[fetchInventoryByInventoryItems] Throttled on batch group ${batchGroup}. Re-queueing batch of ${batch.length} items.`);
+				} else {
+					console.error(`[fetchInventoryByInventoryItems] Error fetching inventory batch:`, error?.message || error);
+					throw error;
+				}
+			});
 
-    /**
-     * Fetch inventory for multiple products using the same method as getInventoryLevelByProductId
-     * This ensures accurate quantities by using the exact same query structure
-     */
-    private async fetchInventoryByProducts(productIds: number[], store: string, accessToken: string): Promise<Map<string, any>> {
-        
-        const result = new Map<string, any>();
-        const shop = await this.getShop(store);
-        if (!shop) {
-            throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
-        }
+			if (retryBatches.length) {
+				queue.unshift(...retryBatches);
+			}
 
-        // Process products sequentially to better respect rate limits
-        // Reduced from parallel processing to avoid throttling
-        let consecutiveThrottles = 0;
-        for (let i = 0; i < productIds.length; i++) {
-            const productId = productIds[i];
-            
-            try {
-                const productData = await this.getInventoryLevelByProductId(store, String(productId));
-                if (productData) {
-                    const quantities = this.extractQuantitiesFromProductData(productId, productData);
-                    // Merge quantities into result
-                    for (const [key, value] of quantities.entries()) {
-                        result.set(key, value);
-                    }
-                    // Reset throttle counter on success
-                    consecutiveThrottles = 0;
-                }
-            } catch (error: any) {
-                // Check if it's a throttling error
-                const isThrottled = error.message?.includes('THROTTLED') || 
-                                   error.message?.toLowerCase().includes('throttled') ||
-                                   error.response?.status === 429;
-                
-                if (isThrottled) {
-                    consecutiveThrottles++;
-                    console.warn(
-                        `[fetchInventoryByProducts] Throttled for product ${productId} (${i + 1}/${productIds.length}, consecutive: ${consecutiveThrottles}). ` +
-                        `Retry logic exhausted. Adding extra delay before continuing...`
-                    );
-                    
-                    // If we're getting consecutive throttles, add extra delay
-                    if (consecutiveThrottles >= 2) {
-                        const extraDelay = this.POST_THROTTLE_DELAY * consecutiveThrottles;
-                        console.log(`[fetchInventoryByProducts] Adding ${extraDelay}ms delay due to consecutive throttles`);
-                        await new Promise(resolve => setTimeout(resolve, extraDelay));
-                    } else {
-                        await new Promise(resolve => setTimeout(resolve, this.POST_THROTTLE_DELAY));
-                    }
-                } else {
-                    // Reset on non-throttle error
-                    consecutiveThrottles = 0;
-                    console.error(`[fetchInventoryByProducts] Error fetching inventory for product ${productId} (${i + 1}/${productIds.length}):`, error.message);
-                }
-                // Continue with next product instead of failing entire batch
-            }
+			if (queue.length) {
+				const delay = throttled ? this.POST_THROTTLE_DELAY : this.RATE_LIMIT_DELAY;
+				await new Promise(resolve => setTimeout(resolve, delay));
+			}
+		}
 
-            // Add delay between requests to respect rate limits (except for last product)
-            // Increase delay if we've had recent throttles
-            if (i < productIds.length - 1) {
-                const delay = consecutiveThrottles > 0 
-                    ? this.RATE_LIMIT_DELAY * 2 
-                    : this.RATE_LIMIT_DELAY;
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
+		return result;
+	}
 
-        return result;
-    }
+	private async fetchInventoryItemsBatch(batch: number[], store: string, accessToken: string): Promise<Map<number, any>> {
+		const inventoryItemGids = batch.map(id => `gid://shopify/InventoryItem/${id}`);
+		const response = await this.makeGraphQLRequest(
+			`https://${store}/admin/api/${process.env.API_VERSION}/graphql.json`,
+			this.inventoryItemsQuery,
+			{ ids: inventoryItemGids },
+			accessToken
+		);
+
+		const nodes = response?.data?.nodes || [];
+		const aggregatedMap = new Map<number, any>();
+
+		for (const node of nodes) {
+			if (!node?.id) continue;
+			const inventoryItemId = this.extractId(node.id);
+			const inventoryLevels = node.inventoryLevels?.edges || [];
+
+			const aggregated = {
+				available: 0,
+				incoming: 0,
+				committed: 0,
+				on_hand: 0
+			};
+
+			for ( const level of inventoryLevels ) {
+				const quantities = level.node?.quantities || [];
+				for ( const qty of quantities ) {
+					if ( qty?.name in aggregated ) {
+						aggregated[qty.name as keyof typeof aggregated] += qty?.quantity || 0;
+					}
+				}
+			}
+
+			aggregatedMap.set(inventoryItemId, aggregated);
+		}
+
+		return aggregatedMap;
+	}
+
+	private isThrottledError(error: any): boolean {
+		if (!error) return false;
+		const message = error?.message?.toLowerCase?.() || '';
+		return message.includes('throttled') || error?.response?.status === 429;
+	}
 	
 
 	getAllProductsModel( res: any ): IProductModel[] {
@@ -756,6 +720,7 @@ export class ProductService {
 	async getInventoryLevelByProductId( store: string, productId: string ): Promise<any> {
 
 		const shop = await this.getShop(store);
+		
 		if (!shop) {
 			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
 		}
