@@ -22,14 +22,11 @@ export class RestockPredictionController {
 
 	@Get()
 	async getRestockPredictions ( @Query(new ValidationPipe({ transform: true })) dto: RestockPredictionQueryDto ): Promise<RestockPredictionModel[]> {
-		const { store, rangeDays1, rangeDays2, futureDays, urgency } = dto;
+		const { store, futureDays } = dto;
 
 		return await this.restockPredictionService.generateRestockPredictions(
 			store,
-			rangeDays1?.toString() ?? '7',
-			rangeDays2?.toString() ?? '30',
-			futureDays?.toString() ?? '15',
-			urgency ?? null,
+			futureDays,
 		);
 	}
 }

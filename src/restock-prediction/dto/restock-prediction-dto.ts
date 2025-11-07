@@ -20,29 +20,7 @@ export class RestockPredictionQueryDto {
 		if ( value === 'null' || value === 'undefined' || value === '' ) return null;
 		return value;
 	})
-	@IsEnum(UrgencyLevelEnum)
-	urgency?: UrgencyLevelEnum | null;
 
-	/**
-	 * Short range days for sales calculation (optional, default: 7)
-	 * Number of days to look back for short-term sales trend
-	 */
-	@IsOptional()
-	@IsString()
-	rangeDays1?: string;
-
-	/**
-	 * Long range days for sales calculation (optional, default: 30)
-	 * Number of days to look back for long-term sales trend
-	 */
-	@IsOptional()
-	@IsString()
-	rangeDays2?: string;
-
-	/**
-	 * Future prediction days (optional, default: 15)
-	 * Number of days ahead to predict restock needs
-	 */
 	@IsOptional()
 	@IsString()
 	futureDays?: string;
