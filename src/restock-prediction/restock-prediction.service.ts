@@ -89,11 +89,9 @@ export class RestockPredictionService {
 			
 			// Fetch products and orders in parallel since they're independent
 			// Note: getAllProducts throws exceptions, getAllOrders returns error objects
-			// Skip detailed inventory fetch for faster processing - use basic inventoryQuantity instead
 			console.log(`[RestockPrediction] Starting parallel fetch of products and orders...`);
-			console.log(`[RestockPrediction] Using fast mode: skipping detailed inventory fetch (using basic inventoryQuantity)`);
 			const [productsResponse, ordersResponse] = await Promise.all([
-				this.productService.getAllProducts( store, true ).catch(err => {
+				this.productService.getAllProducts( store ).catch(err => {
 					console.error(`[RestockPrediction] Error fetching products:`, err.message, err.stack);
 					return { error: err.message, products: null };
 				}),
@@ -280,8 +278,8 @@ export class RestockPredictionService {
 			recommendedAverageStock: Math.ceil(recommendedAverageStock),
 			
 			// Restock recommendations
-			recommendedRestockShortRange: this.calculateRestockQuantity( shortRange.perDaySales, predictionDays, incomingStock ),
-			recommendedRestockLongRange: this.calculateRestockQuantity( longRange.perDaySales, predictionDays, incomingStock ),
+			recommendedRestockShortRange: this.calculateRestockQuantity( shortRange.perDaySales, predictionDays,availableStock, incomingStock ),
+			recommendedRestockLongRange: this.calculateRestockQuantity( longRange.perDaySales, predictionDays,availableStock, incomingStock ),
 
 			// urgency level
 			urgencyLevel: this.calculateUrgencyLevel( recommendedAverageStock ),
@@ -290,11 +288,15 @@ export class RestockPredictionService {
 
 
 	// Calculate how much to restock based on sales velocity and current inventory
-	private calculateRestockQuantity( perDaySales: number, predictionDays: number, incomingStock: number ): number {
-		const expectedSales  = perDaySales * predictionDays;
-		const restockNeeded  = expectedSales - incomingStock;
-		
-		return restockNeeded;
+	private calculateRestockQuantity( perDaySales: number, predictionDays: number, availableStock: number, incomingStock: number ): number {
+		const reorderQuantity  = perDaySales * predictionDays;
+		console.log(`[RestockPrediction] Reorder quantity: ${reorderQuantity}`);
+
+		if ( reorderQuantity < availableStock || ( reorderQuantity < availableStock + 1 ) ) {
+			return 0;
+		} else  {
+			return reorderQuantity + Math.abs( reorderQuantity - availableStock );
+		} 
 	}
 
 
