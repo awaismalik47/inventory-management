@@ -15,13 +15,10 @@ export class ExportService {
 	) {}
 
 	async exportToCsv( body: RestockPredictionQueryDto ): Promise<string> {
-        const { store, rangeDays1, rangeDays2, futureDays, urgency } = body;
+        const { store, futureDays } = body;
         const predictions = await this.restockPredictionService.generateRestockPredictions(
             store,
-            rangeDays1,
-            rangeDays2,
             futureDays,
-            urgency,
         );
         return new Parser().parse( predictions );
 	}

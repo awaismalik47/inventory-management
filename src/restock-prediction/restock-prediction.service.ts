@@ -28,10 +28,7 @@ export class RestockPredictionService {
 
 	async generateRestockPredictions(
 		store     : string, 
-		rangeDays1: string = '7',
-		rangeDays2: string = '30',
 		futureDays: string = '15',
-		urgency   : UrgencyLevelEnum | null = null,
 	): Promise<RestockPredictionModel[]> {
 		try {	
 			console.log(`[RestockPrediction] Generating predictions for store: ${store}`);
@@ -52,26 +49,19 @@ export class RestockPredictionService {
 			}
 
 			// Parse parameters
-			const shortRangeDays = parseInt(rangeDays1);
-			const longRangeDays  = parseInt(rangeDays2);
 			const predictionDays = parseInt(futureDays);
 
 			// Optimized: Calculate sales for both time ranges in parallel since they're independent
-			const [shortRangeSales, longRangeSales] = await Promise.all([
-				this.calculateSalesForPeriod( products, validOrders, shortRangeDays ),
-				this.calculateSalesForPeriod( products, validOrders, longRangeDays )
+			const [sevenDaysRangeSales, fourteenDaysRangeSales, thirtyDaysRangeSales] = await Promise.all([
+				this.calculateSalesForPeriod( products, validOrders, 7 ),
+				this.calculateSalesForPeriod( products, validOrders, 14 ),
+				this.calculateSalesForPeriod( products, validOrders, 30 )
 			]);
 
-			const predictions = this.generatePredictions( products, shortRangeSales, longRangeSales, predictionDays );
+			const predictions = this.generatePredictions( products, sevenDaysRangeSales, fourteenDaysRangeSales, thirtyDaysRangeSales, predictionDays );
 
 			console.log(`[RestockPrediction] Generated ${predictions.length} predictions for store: ${store}`);
 
-			if ( urgency ) {
-				const filtered = this.sortPredictionsByUrgency( predictions, urgency );
-				console.log(`[RestockPrediction] Filtered to ${filtered.length} predictions with urgency: ${urgency}`);
-				return filtered;
-			}
-			
 			return predictions;
 
 		} catch ( error: any ) {
@@ -203,7 +193,7 @@ export class RestockPredictionService {
 
 	// Generate final predictions with restock recommendations
 	// Optimized: Uses Map for O(1) lookups instead of array.find()
-	private generatePredictions(products: IProductModel[], shortRangeSales: Map<number, any>, longRangeSales: Map<number, any>, predictionDays: number): any[] {
+	private generatePredictions(products: IProductModel[], sevenDaysRangeSales: Map<number, any>, fourteenDaysRangeSales: Map<number, any>, thirtyDaysRangeSales: Map<number, any>, predictionDays: number): any[] {
 		const predictions: any[] = [];
 		
 		// Pre-define default sales data to avoid repeated object creation
@@ -214,14 +204,17 @@ export class RestockPredictionService {
 		
 		for ( const product of products ) {
 			for ( const variant of product.variants ) {
-				const shortRangeData = shortRangeSales.get(variant.id) || defaultSalesData;
-				const longRangeData  = longRangeSales.get(variant.id) || defaultSalesData;
+				const sevenDaysRangeData = sevenDaysRangeSales.get(variant.id) || defaultSalesData;
+				const fourteenDaysRangeData = fourteenDaysRangeSales.get(variant.id) || defaultSalesData;
+				const thirtyDaysRangeData = thirtyDaysRangeSales.get(variant.id) || defaultSalesData;
+
 				
 				const prediction = this.createPrediction(
 					product, 
 					variant, 
-					shortRangeData, 
-					longRangeData, 
+					sevenDaysRangeData, 
+					fourteenDaysRangeData, 
+					thirtyDaysRangeData, 
 					predictionDays
 				);
 				
@@ -233,27 +226,18 @@ export class RestockPredictionService {
 	}
 
 
-	private sortPredictionsByUrgency( predictions: RestockPredictionModel[], urgency: UrgencyLevelEnum | null ): RestockPredictionModel[] {
-		const filteredPredictions = urgency
-			? predictions.filter(prediction => prediction.urgencyLevel === urgency)
-			: predictions;
-
-		return filteredPredictions.sort(
-			( a, b) => this.urgencyPriority[b.urgencyLevel] - this.urgencyPriority[a.urgencyLevel]
-		);
-	}
-
-
 	// Create a complete prediction for a variant
-	private createPrediction( product: IProductModel, variant: IVariantModel, shortRange: any, longRange: any, predictionDays: number ): RestockPredictionModel {
+	private createPrediction( product: IProductModel, variant: IVariantModel, sevenDaysRange: any, fourteenDaysRange: any, thirtyDaysRange:any, predictionDays: number ): RestockPredictionModel {
 		const availableStock = variant.available || 0;
 		const incomingStock  = variant.incoming || 0;
 		const totalInventory = availableStock + incomingStock;
-		
-		const averagePerDaySales = (shortRange.perDaySales + longRange.perDaySales) / 2;
-		const expectedSales      = averagePerDaySales * predictionDays;
-		
-		const recommendedAverageStock = Math.max( 0, expectedSales - totalInventory);
+	
+
+		const recommendedRestockSevenDaysRange    = this.calculateRestockQuantity( sevenDaysRange.perDaySales, predictionDays,availableStock, incomingStock );
+		const recommendedRestockFourteenDaysRange = this.calculateRestockQuantity( fourteenDaysRange.perDaySales, predictionDays,availableStock, incomingStock );
+		const recommendedRestockThirtyDaysRange   = this.calculateRestockQuantity( thirtyDaysRange.perDaySales, predictionDays,availableStock, incomingStock );
+		const recommendedAverageStock             = ( recommendedRestockSevenDaysRange + recommendedRestockFourteenDaysRange + recommendedRestockThirtyDaysRange ) / 3;
+
 		return {
 			// Basic info
 			productImage: variant.imageSrc ? variant.imageSrc : product.imageUrl,
@@ -264,23 +248,25 @@ export class RestockPredictionService {
 			sku: variant.sku,
 			
 			// Sales data
-			shortRangeSales: shortRange.totalSales,
-			longRangeSales: longRange.totalSales,
-			perDaySoldShortRange: shortRange.perDaySales,
-			perDaySoldLongRange: longRange.perDaySales,
+			sevenDaysRangeSales: sevenDaysRange.totalSales,
+			fourteenDaysRangeSales: fourteenDaysRange.totalSales,
+			thirtyDaysRangeSales: thirtyDaysRange.totalSales,
+			perDaySoldSevenDaysRange: sevenDaysRange.perDaySales,
+			perDaySoldFourteenDaysRange: fourteenDaysRange.perDaySales,
+			perDaySoldThirtyDaysRange: thirtyDaysRange.perDaySales,
 			
 			// Stock info
 			availableStock,
 			incomingStock,
 			totalInventory,
 			
-			// Average calculations
-			recommendedAverageStock: Math.ceil(recommendedAverageStock),
-			
 			// Restock recommendations
-			recommendedRestockShortRange: this.calculateRestockQuantity( shortRange.perDaySales, predictionDays,availableStock, incomingStock ),
-			recommendedRestockLongRange: this.calculateRestockQuantity( longRange.perDaySales, predictionDays,availableStock, incomingStock ),
+			recommendedRestockSevenDaysRange,
+			recommendedRestockFourteenDaysRange,
+			recommendedRestockThirtyDaysRange,
 
+			// Average calculations
+			recommendedAverageStock,
 			// urgency level
 			urgencyLevel: this.calculateUrgencyLevel( recommendedAverageStock ),
 		};
@@ -290,7 +276,6 @@ export class RestockPredictionService {
 	// Calculate how much to restock based on sales velocity and current inventory
 	private calculateRestockQuantity( perDaySales: number, predictionDays: number, availableStock: number, incomingStock: number ): number {
 		const reorderQuantity  = perDaySales * predictionDays;
-		console.log(`[RestockPrediction] Reorder quantity: ${reorderQuantity}`);
 
 		if ( reorderQuantity < availableStock || ( reorderQuantity < availableStock + 1 ) ) {
 			return 0;

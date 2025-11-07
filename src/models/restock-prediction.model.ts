@@ -7,16 +7,19 @@ export interface RestockPredictionModel {
     variantId: number;
     variantName: string;
     sku: string;
-    shortRangeSales: number;
-    longRangeSales: number;
-    perDaySoldShortRange: number;
-    perDaySoldLongRange: number;
+    sevenDaysRangeSales: number;
+    fourteenDaysRangeSales: number;
+    thirtyDaysRangeSales: number;
+    perDaySoldSevenDaysRange: number;
+    perDaySoldFourteenDaysRange: number;
+    perDaySoldThirtyDaysRange: number;
     availableStock: number;
     incomingStock: number;
     totalInventory: number;
     recommendedAverageStock: number;
-    recommendedRestockShortRange: number;
-    recommendedRestockLongRange: number;
+    recommendedRestockSevenDaysRange: number;
+    recommendedRestockFourteenDaysRange: number;
+    recommendedRestockThirtyDaysRange: number;
     urgencyLevel: UrgencyLevelEnum;
 }
 
