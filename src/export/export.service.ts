@@ -7,6 +7,8 @@ import { RestockPredictionQueryDto } from "src/restock-prediction/dto/restock-pr
 // Services
 import { RestockPredictionService } from "src/restock-prediction/restock-prediction.service";
 
+// Models
+import type { RestockPredictionModel } from "src/models/restock-prediction.model";
 
 @Injectable()
 export class ExportService {
@@ -15,12 +17,17 @@ export class ExportService {
 	) {}
 
 	async exportToCsv( body: RestockPredictionQueryDto ): Promise<string> {
-        const { store, futureDays } = body;
+        const { store, futureDays, status } = body;
         const predictions = await this.restockPredictionService.generateRestockPredictions(
             store,
             futureDays,
+            status ?? 'active'
         );
         return new Parser().parse( predictions );
+	}
+
+	async exportSpecificProducts( body: RestockPredictionModel[] ): Promise<string> {
+		return new Parser().parse( body );
 	}
 
 }
