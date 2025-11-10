@@ -4,7 +4,7 @@ import { Controller, Get, Query, UseGuards, ValidationPipe } from "@nestjs/commo
 import { RestockPredictionService } from "./restock-prediction.service";
 
 // Models
-import type { RestockPredictionQueryModel, RestockPredictionModel } from "src/models/restock-prediction.model";
+import type { RestockPredictionModel } from "src/models/restock-prediction.model";
 
 // Guards
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";

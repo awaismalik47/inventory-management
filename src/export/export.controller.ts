@@ -8,6 +8,9 @@ import { ExportService } from './export.service';
 // DTOs
 import { RestockPredictionQueryDto } from 'src/restock-prediction/dto/restock-prediction-dto';
 
+// Models
+import { RestockPredictionModel } from 'src/models/restock-prediction.model';
+
 @Controller('export')
 @UseGuards(JwtAuthGuard)
 export class ExportController {
@@ -19,6 +22,18 @@ export class ExportController {
 	async exportToCsv( @Body() body: RestockPredictionQueryDto, @Res() res: Response ) {
 		try {
 			const csv = await this.exportService.exportToCsv( body );
+			res.header('Content-Type', 'text/csv');
+			res.attachment('restock-predictions.csv');
+			return res.send(csv);
+		} catch ( error ) {
+			throw new BadRequestException(error);
+		}
+	}
+
+	@Post('csv/specific-products')
+	async exportSpecificProducts( @Body() body: RestockPredictionModel[], @Res() res: Response ) {
+		try {
+			const csv = await this.exportService.exportSpecificProducts( body );
 			res.header('Content-Type', 'text/csv');
 			res.attachment('restock-predictions.csv');
 			return res.send(csv);
