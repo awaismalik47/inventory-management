@@ -29,12 +29,13 @@ export class RestockPredictionService {
 	async generateRestockPredictions(
 		store     : string, 
 		futureDays: string = '15',
+		status    : string = 'active'
 	): Promise<RestockPredictionModel[]> {
 		try {	
 			console.log(`[RestockPrediction] Generating predictions for store: ${store}`);
 
 			// Get data from services - fetches ALL products and orders automatically
-			const { products, orders } = await this.fetchData( store );
+			const { products, orders } = await this.fetchData( store, status );
 			
 			if ( !products || products.length === 0 ) {
 				console.warn(`[RestockPrediction] No products available for store: ${store}`);
@@ -73,7 +74,7 @@ export class RestockPredictionService {
 
 	// Fetch data from services - fetches ALL products and orders without pagination
 	// Optimized: Fetches both in parallel for faster execution
-	private async fetchData(store: string) {
+	private async fetchData( store: string, status: string ) {
 		try {
 			console.log(`[RestockPrediction] Fetching data for store: ${store}`);
 			
@@ -81,7 +82,7 @@ export class RestockPredictionService {
 			// Note: getAllProducts throws exceptions, getAllOrders returns error objects
 			console.log(`[RestockPrediction] Starting parallel fetch of products and orders...`);
 			const [productsResponse, ordersResponse] = await Promise.all([
-				this.productService.getAllProducts( store ).catch(err => {
+				this.productService.getAllProducts( store, status ).catch(err => {
 					console.error(`[RestockPrediction] Error fetching products:`, err.message, err.stack);
 					return { error: err.message, products: null };
 				}),
@@ -246,6 +247,7 @@ export class RestockPredictionService {
 			variantId: variant.id,
 			variantName: variant.title,
 			sku: variant.sku,
+			status: product.status,
 			
 			// Sales data
 			sevenDaysRangeSales: sevenDaysRange.totalSales,

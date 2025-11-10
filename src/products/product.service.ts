@@ -335,7 +335,7 @@ export class ProductService {
 	  }
 
 
-	async getAllProducts(store: string, skipInventoryFetch: boolean = false): Promise<any> {
+	async getAllProducts(store: string, status: string, skipInventoryFetch: boolean = false ): Promise<any> {
 		const shop = await this.getShop(store);
 		if (!shop) {
 			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
@@ -354,7 +354,7 @@ export class ProductService {
 				pageCount++;
 				const query = `
 				  query ($first: Int!, $after: String) {
-					products(first: $first, after: $after, query: "status:active") {
+					products(first: $first, after: $after, query: "status:${status}") {
 					  edges {
 						cursor
 						node {
@@ -451,7 +451,7 @@ export class ProductService {
 		  
 			// Fetch inventory for all products (or use basic inventoryQuantity if skipped)
 			let productsWithInventory: any[];
-			if (skipInventoryFetch) {
+			if ( skipInventoryFetch ) {
 				console.log(`[getAllProducts] Skipping detailed inventory fetch. Using basic inventoryQuantity from product data.`);
 				// Use inventoryQuantity as available, set incoming to 0
 				productsWithInventory = allProducts.map(product => ({

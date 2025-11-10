@@ -22,11 +22,12 @@ export class RestockPredictionController {
 
 	@Get()
 	async getRestockPredictions ( @Query(new ValidationPipe({ transform: true })) dto: RestockPredictionQueryDto ): Promise<RestockPredictionModel[]> {
-		const { store, futureDays } = dto;
+		const { store, futureDays, status } = dto;
 
 		return await this.restockPredictionService.generateRestockPredictions(
 			store,
 			futureDays,
+			status
 		);
 	}
 }
