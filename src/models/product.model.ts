@@ -29,5 +29,5 @@ export interface IVariantModel {
     available?            : number;
     incoming?             : number;
     on_hand?              : number;
-    committed?            :  number;
+    committed?            : number;
 }
