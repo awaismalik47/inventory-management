@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, NotFoundException, UnauthorizedException } from "@nestjs/common";
+import { Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { ShopService } from "src/shop/shop.service";
 import { WebhooksService } from "src/webhooks/webhooks.service";
 import { ProductService } from "src/products/product.service";
@@ -26,15 +26,22 @@ export class AppRegistrationService {
         // If shop doesn't exist, add shop to database and register webhooks
         if ( !shop ) {
 
-            await this.shopService.upsertShop({ shop: dto.shop, accessToken: dto.accessToken, installedByUserId: userId });
+            const shopDomain = await this.shopService.CheckShopExistsInShopify( dto.shop, dto.accessToken );
+            if ( !shopDomain ) {
+                throw new UnauthorizedException( 'Shop not found' );
+            }
+
+            console.log( '[AppRegistrationService] shopDomain', shopDomain );
+
+            await this.shopService.upsertShop({ shop: dto.shop, accessToken: dto.accessToken, installedByUserId: userId, shopifyDomain: shopDomain.shop.myshopify_domain });
             
-            // // Register webhooks after saving shop data
-            // try {
-            //     await this.webhooksService.registerAllWebHooks(dto.shop, dto.accessToken);
-            // } catch (webhookError) {
-            //     throw new InternalServerErrorException('Failed to register webhooks');
-            //     // Don't fail the flow if webhook registration fails
-            // }
+            // Register webhooks after saving shop data
+            try {
+                await this.webhooksService.registerAllWebHooks( dto.shop, dto.accessToken );
+            } catch ( webhookError ) {
+                console.error( '[AppRegistrationService] Failed to register webhooks during app registration:', webhookError );
+                // Don't fail the flow if webhook registration fails
+            }
             
             return {
                 message     : 'App is installed',

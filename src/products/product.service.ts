@@ -230,14 +230,13 @@ export class ProductService {
 			  query ($first: Int!, $after: String) {
 				products(first: $first, after: $after, query: "status:active") {
 				  edges {
-					cursor
 					node {
 					  id
 					  title
 					  productType
 					  status
 					  featuredImage { url }
-					  images(first: 100) { edges { node { id url } } }
+					  images(first: 10) { edges { node { id url } } }
 					  variants(first: 100) {
 						edges {
 						  node {
@@ -248,7 +247,6 @@ export class ProductService {
 							inventoryQuantity
 							inventoryItem { id }
 							image { id url }
-							product { id }
 						  }
 						}
 					  }
@@ -356,14 +354,13 @@ export class ProductService {
 				  query ($first: Int!, $after: String) {
 					products(first: $first, after: $after, query: "status:${status}") {
 					  edges {
-						cursor
 						node {
 						  id
 						  title
 						  productType
 						  status
 						  featuredImage { url }
-						  images(first: 100) { edges { node { id url } } }
+						  images(first: 10) { edges { node { id url } } }
 						  variants(first: 100) {
 							edges {
 							  node {
@@ -374,7 +371,6 @@ export class ProductService {
 								inventoryQuantity
 								inventoryItem { id }
 								image { id url }
-								product { id }
 							  }
 							}
 						  }

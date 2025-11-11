@@ -10,14 +10,8 @@ export class OrdersController {
 
     constructor( private readonly orderService: OrderService ) {}
 
-    
+
     @Get()
-    async getOrders(@Query() query: { store?: string; limit?: string }): Promise<any> {
-        return await this.orderService.getOrders(query.store ?? '', query.limit);
-    }
-
-
-    @Get('all')
     async getAllOrders(@Query() query: { store?: string; days?: string }): Promise<any> {
         console.log(`[getAllOrders] Starting to fetch orders from last ${query.days ?? '30'} days for store: ${query.store ?? ''}`);
         return await this.orderService.getAllOrders(query.store ?? '', parseInt(query.days ?? '30'));
@@ -31,6 +25,12 @@ export class OrdersController {
             query.startDate ?? '',
             query.endDate ?? ''
         );
+    }
+
+
+    @Get('local')
+    async getOrderFromLocalDb( @Query() query: { store?: string; orderId?: string } ): Promise<any> {
+        return await this.orderService.getOrderFromLocalDb( query.store ?? '', query.orderId ?? '' );
     }
 
 }

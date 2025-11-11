@@ -8,46 +8,46 @@ import { WebhookTopicEnum } from 'src/core/enums';
 export class WebhooksService {
 	constructor( private readonly shopService: ShopService, private readonly httpService: HttpService ) {}
 
-		// async registerAllWebHooks( shopDomain: string , accessToken: string ) {
-		// 	const webhooks = [
-		// 		{
-		// 		  topic: WebhookTopicEnum.OrdersCreate,
-		// 		  address: `${process.env.API_URL}/webhooks/orders/create`,
-		// 		},
-		// 		{
-		// 		  topic: WebhookTopicEnum.ProductsUpdate,
-		// 		  address: `${process.env.API_URL}/webhooks/products/update`,
-		// 		},
-		// 		{
-		// 		  topic: WebhookTopicEnum.ProductsDelete,
-		// 		  address: `${process.env.API_URL}/webhooks/products/delete`,
-		// 		},
-		// 		{
-		// 		  topic: WebhookTopicEnum.ProductsCreate,
-		// 		  address: `${process.env.API_URL}/webhooks/products/create`,
-		// 		},
-		// 		{
-		// 		  topic: WebhookTopicEnum.AppUninstalled,
-		// 		  address: `${process.env.API_URL}/webhooks/app/uninstalled`,
-		// 		},
-		// 		{
-		// 			topic: WebhookTopicEnum.InventoryItemsUpdate,
-		// 			address: `${process.env.API_URL}/webhooks/inventory/items/update`,
-		// 		},
-		// 		{
-		// 			topic: WebhookTopicEnum.InventoryItemsCreate,
-		// 			address: `${process.env.API_URL}/webhooks/inventory/items/create`,
-		// 		},
-		// 		{
-		// 			topic: WebhookTopicEnum.InventoryItemsDelete,
-		// 			address: `${process.env.API_URL}/webhooks/inventory/items/delete`,
-		// 		},
-		// 	  ];
+		async registerAllWebHooks( shopDomain: string , accessToken: string ) {
+			const webhooks = [
+				{
+				  topic: WebhookTopicEnum.OrdersCreate,
+				  address: `${process.env.API_URL}/webhooks/orders/create`,
+				},
+				{
+				  topic: WebhookTopicEnum.ProductsUpdate,
+				  address: `${process.env.API_URL}/webhooks/products/update`,
+				},
+				{
+				  topic: WebhookTopicEnum.ProductsDelete,
+				  address: `${process.env.API_URL}/webhooks/products/delete`,
+				},
+				{
+				  topic: WebhookTopicEnum.ProductsCreate,
+				  address: `${process.env.API_URL}/webhooks/products/create`,
+				},
+				{
+				  topic: WebhookTopicEnum.AppUninstalled,
+				  address: `${process.env.API_URL}/webhooks/app/uninstalled`,
+				},
+				{
+					topic: WebhookTopicEnum.InventoryItemsUpdate,
+					address: `${process.env.API_URL}/webhooks/inventory/items/update`,
+				},
+				{
+					topic: WebhookTopicEnum.InventoryItemsCreate,
+					address: `${process.env.API_URL}/webhooks/inventory/items/create`,
+				},
+				{
+					topic: WebhookTopicEnum.InventoryItemsDelete,
+					address: `${process.env.API_URL}/webhooks/inventory/items/delete`,
+				},
+			  ];
 
-		// 	for ( const webhook of webhooks ) {
-		// 		await this.registerWebhook( shopDomain, accessToken, webhook.topic, webhook.address );
-		// 	}
-		// }
+			for ( const webhook of webhooks ) {
+				await this.registerWebhook( shopDomain, accessToken, webhook.topic, webhook.address );
+			}
+		}
 
 
 		private async registerWebhook(
