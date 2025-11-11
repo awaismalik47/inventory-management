@@ -14,12 +14,6 @@ import { UrgencyLevelEnum } from "src/core/enums";
 
 @Injectable()
 export class RestockPredictionService {
-	private readonly urgencyPriority: Record<UrgencyLevelEnum, number> = {
-		[UrgencyLevelEnum.Critical]: 4,
-		[UrgencyLevelEnum.High]    : 3,
-		[UrgencyLevelEnum.Medium]  : 2,
-		[UrgencyLevelEnum.Low]     : 1,
-	};
 
 	constructor( 
 		private readonly productService: ProductService,
@@ -50,10 +44,10 @@ export class RestockPredictionService {
 			}
 
 			// Parse parameters
-			const predictionDays = parseInt(futureDays);
+			const predictionDays = parseInt( futureDays );
 
 			// Optimized: Calculate sales for both time ranges in parallel since they're independent
-			const [sevenDaysRangeSales, fourteenDaysRangeSales, thirtyDaysRangeSales] = await Promise.all([
+			const [ sevenDaysRangeSales, fourteenDaysRangeSales, thirtyDaysRangeSales ] = await Promise.all([
 				this.calculateSalesForPeriod( products, validOrders, 7 ),
 				this.calculateSalesForPeriod( products, validOrders, 14 ),
 				this.calculateSalesForPeriod( products, validOrders, 30 )
@@ -70,7 +64,6 @@ export class RestockPredictionService {
 			throw new InternalServerErrorException(`Failed to generate restock predictions: ${error.message}`);
 		}
 	}
-
 
 	// Fetch data from services - fetches ALL products and orders without pagination
 	// Optimized: Fetches both in parallel for faster execution
@@ -139,8 +132,8 @@ export class RestockPredictionService {
 	// Calculate sales data for a specific time period
 	// Optimized: More efficient date filtering and calculations
 	private async calculateSalesForPeriod( products: IProductModel[], orders: orderModel[], days: number ) {
-		const cutoffDate     = this.getCutoffDate(days);
-		const cutoffTime     = cutoffDate.getTime(); // Convert to timestamp once
+		const cutoffDate     = this.getCutoffDate( days );
+		const cutoffTime     = cutoffDate.getTime();
 		const salesByVariant = new Map<number, number>();
 		
 		// Optimized: Single loop to filter and calculate sales
@@ -159,16 +152,11 @@ export class RestockPredictionService {
 	// Get cutoff date for filtering orders
 	private getCutoffDate( days: number ): Date {
 		const cutoffDate = new Date();
-		cutoffDate.setDate(cutoffDate.getDate() - days);
+		cutoffDate.setDate( cutoffDate.getDate() - days );
 		return cutoffDate;
 	}
 
 
-	// Removed redundant methods - logic moved to calculateSalesForPeriod for optimization
-
-
-	// Create sales data structure for all variants
-	// Optimized: Uses Map for O(1) lookup instead of array.find()
 	private createSalesData( products: IProductModel[], salesByVariant: Map<number, number>, days: number ): Map<number, any> {
 		const salesDataMap = new Map<number, any>();
 		
@@ -229,6 +217,7 @@ export class RestockPredictionService {
 
 	// Create a complete prediction for a variant
 	private createPrediction( product: IProductModel, variant: IVariantModel, sevenDaysRange: any, fourteenDaysRange: any, thirtyDaysRange:any, predictionDays: number ): RestockPredictionModel {
+
 		const availableStock = variant.available || 0;
 		const incomingStock  = variant.incoming || 0;
 		const totalInventory = availableStock + incomingStock;
@@ -270,7 +259,7 @@ export class RestockPredictionService {
 			// Average calculations
 			recommendedAverageStock,
 			// urgency level
-			urgencyLevel: this.calculateUrgencyLevel( recommendedAverageStock ),
+			urgencyLevel: this.calculateUrgencyLevel( availableStock, sevenDaysRange.perDaySales ),
 		};
 	}
 
@@ -288,10 +277,27 @@ export class RestockPredictionService {
 
 
 	// Calculate urgency level
-	private calculateUrgencyLevel( recommendedAverageStock: number ): UrgencyLevelEnum {
-		if ( recommendedAverageStock >= 20 ) return UrgencyLevelEnum.Critical;
-		if ( recommendedAverageStock >= 10 ) return UrgencyLevelEnum.High;
-		if ( recommendedAverageStock >= 5 )  return UrgencyLevelEnum.Medium;
-		return UrgencyLevelEnum.Low;
+	private calculateUrgencyLevel( availableStock: number, perDaySoldSevenDaysRange: number, leadTime: number = 15 ): UrgencyLevelEnum {
+
+		if ( availableStock < 0 ) {
+			return UrgencyLevelEnum.Critical;
+		}
+
+		if ( perDaySoldSevenDaysRange === 0 ) {
+			return UrgencyLevelEnum.Low;
+		}
+
+		const daysOfStockLeft = availableStock / perDaySoldSevenDaysRange;
+
+		if ( daysOfStockLeft <= leadTime ) {
+		  return UrgencyLevelEnum.Critical;
+		} else if ( daysOfStockLeft <= leadTime + 7 ) { // total 22 days of stock left
+			return UrgencyLevelEnum.High;
+		} else if ( daysOfStockLeft <= 30 ) {
+			return UrgencyLevelEnum.Medium;
+		} else {
+			return UrgencyLevelEnum.Low;
+		}
+		
 	}
 }
