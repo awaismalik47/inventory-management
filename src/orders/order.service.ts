@@ -1,8 +1,17 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+
+// Services
 import { ShopService } from 'src/shop/shop.service';
+
+// Models
 import { orderModel } from 'src/models/order.model';
+
+// Schemas
+import { OrderHistory, OrderHistoryDocument } from 'src/schema/order-history.schema';
 
 @Injectable()
 export class OrderService {  
@@ -14,42 +23,10 @@ export class OrderService {
 	
     constructor(
         private readonly httpService: HttpService,
-        private readonly shopService: ShopService
+        private readonly shopService: ShopService,
+        @InjectModel(OrderHistory.name)
+        private readonly orderHistoryModel: Model<OrderHistoryDocument>
     ) {}
-
-    async getOrders( store: string, limit: string = '250' ): Promise<any> {
-        const shop = await this.shopService.findByShop( store );
-
-        if (!shop) {
-            return {
-                error: 'Shop not found. Please complete OAuth flow first.',
-                instructions: 'Visit /shopify-oauth/init?shop=your-store.myshopify.com first'
-            };
-        }
-        const accessToken = shop.accessToken;
-        
-
-        try {
-            const ordersResponse = await lastValueFrom(
-                this.httpService.get(`https://${store}/admin/api/${process.env.API_VERSION}/orders.json?limit=${limit}&status=any&fulfillment_status=any`, {
-                    headers: {
-                        'X-Shopify-Access-Token': accessToken
-                    }
-                })
-            );
-
-            return {
-                orders: this.getAllOrderModel( ordersResponse.data.orders ),
-                totalOrders: ordersResponse.data.orders.length
-            }
-
-        } catch (error) {
-            return {
-                error: 'Failed to fetch orders',
-                message: error.response?.data || error.message
-            };
-        }
-    }
 
 
 	async getAllOrders( store: string, days: number = 30): Promise<any> {
@@ -83,25 +60,17 @@ export class OrderService {
 
 			console.log(`[getAllOrders] Completed GraphQL fetch. Total normalized orders: ${orderModels.length}`);
 
+			await this.persistOrdersForShop(store, orderModels);
+
 			return {
-				orders: orderModels,
+				message: 'Orders fetched successfully',
 				totalOrders: orderModels.length
 			};
 
-		} catch (error: any) {
-			console.error(`[getAllOrders] Error details:`, {
-				message: error?.message,
-				response: error?.response?.data,
-				status: error?.response?.status,
-				url: error?.config?.url
-			});
-			return {
-				error: 'Failed to fetch orders',
-				message: error?.response?.data ? JSON.stringify(error.response.data) : error?.message || 'Unknown error'
-			};
+		} catch ( error: any ) {
+			throw new Error( error?.message || 'Failed to fetch orders' );
 		}
 	}
-
 
 
 	async getAllOrdersByRange( store: string, startDate: string, endDate: string ): Promise<any> {
@@ -179,6 +148,165 @@ export class OrderService {
     }
 
 
+	private async persistOrdersForShop(store: string, orders: orderModel[]): Promise<void> {
+		if ( !orders?.length ) {
+			return;
+		}
+
+		const operations = orders.map( order => {
+			const orderCreatedAt = order.createdAt ? new Date(order.createdAt) : new Date();
+			const dedupeKey = this.getOrderDedupeKey( order );
+
+			return {
+				updateOne: {
+					filter: { shop: store, dedupeKey },
+					update: {
+						$set: {
+							shop: store,
+							dedupeKey,
+							orderId: order.orderId,
+							orderNumber: order.orderNumber,
+							orderCreatedAt,
+							financialStatus: order.financialStatus,
+							fulfillmentStatus: order.fulfillmentStatus,
+							productId: order.productId ?? null,
+							productName: order.productName,
+							productExists: order.productExists,
+							variantId: order.variantId ?? null,
+							quantity: order.quantity,
+							variantTitle: order.variantTitle,
+						}
+					},
+					upsert: true,
+				}
+			};
+		});
+
+		try {
+			await this.orderHistoryModel.bulkWrite(operations, { ordered: false });
+		} catch (error) {
+			console.error('[persistOrdersForShop] Failed to upsert orders', error);
+			throw error;
+		}
+
+		await this.deleteOrdersOlderThan(store, 30);
+	}
+
+
+	private getOrderDedupeKey(order: orderModel): string {
+		const orderId = order.orderId ?? 'order';
+		const variantId = order.variantId ?? 'variant';
+		const productId = order.productId ?? 'product';
+		const productName = order.productName ?? 'name';
+
+		return `${orderId}:${variantId}:${productId}:${productName}`;
+	}
+
+	private async deleteOrdersOlderThan(store: string, days: number): Promise<void> {
+		const cutoffDate = new Date();
+		cutoffDate.setDate(cutoffDate.getDate() - days);
+
+		await this.orderHistoryModel.deleteMany({
+			shop: store,
+			orderCreatedAt: { $lt: cutoffDate }
+		});
+	}
+
+
+	async getStoredOrders(
+		store: string,
+		days: number = 30
+	): Promise<{ orders: orderModel[]; totalOrders: number }> {
+		if (!store) {
+			throw new UnauthorizedException('Missing store parameter.');
+		}
+
+		const shop = await this.shopService.findByShop(store);
+
+		if (!shop) {
+			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
+		}
+
+		await this.deleteOrdersOlderThan(store, days);
+
+		const cutoffDate = new Date();
+		cutoffDate.setDate(cutoffDate.getDate() - days);
+
+		const docs = await this.orderHistoryModel
+			.find({
+				shop: store,
+				orderCreatedAt: { $gte: cutoffDate }
+			})
+			.lean()
+			.exec();
+
+		const orders = docs.map(doc => this.mapHistoryToOrderModel(doc));
+
+		return {
+			orders,
+			totalOrders: orders.length
+		};
+	}
+
+
+	async saveOrdersForShop(store: string, rawOrders: any[]): Promise<void> {
+		if (!rawOrders?.length) {
+			return;
+		}
+
+		const shop = await this.shopService.findByShop(store);
+		if (!shop) {
+			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
+		}
+
+		const orders = this.getAllOrderModel(rawOrders);
+		if (!orders.length) {
+			return;
+		}
+
+		await this.persistOrdersForShop(store, orders);
+	}
+
+	async pruneStoredOrders(days: number = 30, store?: string): Promise<void> {
+		if (store) {
+			await this.deleteOrdersOlderThan(store, days);
+			return;
+		}
+
+		const shops: string[] = await this.orderHistoryModel.distinct('shop');
+		await Promise.all(shops.map(shop => this.deleteOrdersOlderThan(shop, days)));
+	}
+
+
+	async getOrderFromLocalDb(store: string, orderId: string): Promise<orderModel | null> {
+		const order = await this.orderHistoryModel.findOne({ shop: store, orderId });
+		console.log('order', order);
+		if (!order) {
+			return null;
+		}
+		return this.mapHistoryToOrderModel(order);
+	}
+
+
+	private mapHistoryToOrderModel(history: any): orderModel {
+		return {
+			orderId: history.orderId ?? 0,
+			orderNumber: history.orderNumber ?? '',
+			createdAt: history.orderCreatedAt
+				? new Date(history.orderCreatedAt).toISOString()
+				: '',
+			financialStatus: history.financialStatus ?? '',
+			fulfillmentStatus: history.fulfillmentStatus ?? '',
+			productId: history.productId ?? 0,
+			productName: history.productName ?? '',
+			productExists: history.productExists ?? false,
+			variantId: history.variantId ?? 0,
+			quantity: history.quantity ?? 0,
+			variantTitle: history.variantTitle ?? ''
+		};
+	}
+
+
 	private async fetchOrdersUsingGraphQL(
 		store: string,
 		accessToken: string,
@@ -189,7 +317,6 @@ export class OrderService {
 		query OrdersByDate($first: Int!, $after: String, $searchQuery: String!) {
 			orders(first: $first, after: $after, query: $searchQuery, sortKey: CREATED_AT, reverse: true) {
 				edges {
-					cursor
 					node {
 						id
 						name
@@ -198,7 +325,6 @@ export class OrderService {
 						displayFulfillmentStatus
 						lineItems(first: 100) {
 							edges {
-								cursor
 								node {
 									name
 									title
@@ -209,7 +335,6 @@ export class OrderService {
 									}
 									product {
 										id
-										title
 									}
 								}
 							}
@@ -397,8 +522,8 @@ export class OrderService {
 		};
 	}
 
-    private extractNumericId(gid: string | null | undefined): number | null {
-        if (!gid || typeof gid !== 'string') {
+    private extractNumericId( gid: string | null | undefined ): number | null {
+        if ( !gid || typeof gid !== 'string' ) {
             return null;
         }
 

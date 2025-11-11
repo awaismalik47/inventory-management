@@ -13,7 +13,7 @@ export class ShopService {
 
   constructor( @InjectModel(Shop.name) private shopModel: Model<Shop> ) {}
 	
-	async upsertShop( shopData: { shop: string; accessToken: string; scopes?: string; installedByUserId?: string } ) {
+	async upsertShop( shopData: { shop: string; accessToken: string; scopes?: string; installedByUserId?: string; shopifyDomain?: string } ) {
 		return this.shopModel.findOneAndUpdate(
 			{ shop: shopData.shop },
 			{ $set: shopData },
@@ -24,6 +24,11 @@ export class ShopService {
 
 	async findByShop( shop: string ) {
 		return await this.shopModel.findOne({ shop });
+	}
+
+
+	async findByShopifyDomain( shopifyDomain: string ) {
+		return await this.shopModel.findOne({ shopifyDomain });
 	}
 
 

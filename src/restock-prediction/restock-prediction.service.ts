@@ -73,14 +73,14 @@ export class RestockPredictionService {
 			
 			// Fetch products and orders in parallel since they're independent
 			// Note: getAllProducts throws exceptions, getAllOrders returns error objects
-			console.log(`[RestockPrediction] Starting parallel fetch of products and orders...`);
+			console.log(`[RestockPrediction] Starting parallel fetch of products and stored orders...`);
 			const [productsResponse, ordersResponse] = await Promise.all([
 				this.productService.getAllProducts( store, status ).catch(err => {
 					console.error(`[RestockPrediction] Error fetching products:`, err.message, err.stack);
 					return { error: err.message, products: null };
 				}),
-				this.orderService.getAllOrders( store ).catch(err => {
-					console.error(`[RestockPrediction] Error fetching orders:`, err.message, err.stack);
+				this.orderService.getStoredOrders( store ).catch(err => {
+					console.error(`[RestockPrediction] Error fetching stored orders:`, err.message, err.stack);
 					return { error: err.message, orders: null };
 				})
 			]);
@@ -93,18 +93,15 @@ export class RestockPredictionService {
 				return { products: null, orders: null };
 			}
 			
-			// Orders error is not fatal - we can still generate predictions with zero sales
-			if ( ordersResponse?.error ) {
-				console.warn(`[RestockPrediction] Orders fetch error (will continue with empty orders):`, ordersResponse.error);
-				if (ordersResponse.message) {
-					console.warn(`[RestockPrediction] Orders error details:`, ordersResponse.message);
-				}
+			const ordersError = ordersResponse && 'error' in ordersResponse ? ordersResponse.error : null;
+			if ( ordersError ) {
+				console.warn(`[RestockPrediction] Stored orders fetch error (will continue with empty orders):`, ordersError);
 			}
 
 			// Validate data exists
 			const products = productsResponse?.products || [];
 			// If orders failed, use empty array so predictions can still be generated
-			const orders = ordersResponse?.error ? [] : (ordersResponse?.orders || []);
+			const orders = ordersError ? [] : (ordersResponse?.orders || []);
 			
 			console.log(`[RestockPrediction] Received products response: ${products.length} products`);
 			console.log(`[RestockPrediction] Received orders response: ${orders.length} orders`);

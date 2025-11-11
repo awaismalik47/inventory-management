@@ -17,6 +17,9 @@ export class Shop extends Document {
 
   @Prop()
   installedByUserId: string;
+
+  @Prop()
+  shopifyDomain: string;
 }
 
 export const ShopSchema = SchemaFactory.createForClass( Shop );
