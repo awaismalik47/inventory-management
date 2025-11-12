@@ -22,6 +22,12 @@ export interface RestockPredictionModel {
 	recommendedRestockFourteenDaysRange: number;
 	recommendedRestockThirtyDaysRange: number;
 	urgencyLevel: UrgencyLevelEnum;
+	rangeTotalSales?: number;
+	rangePerDaySales?: number;
+	rangeRecommendedRestock?: number;
+	rangeDays?: number;
+	rangeStartDate?: string;
+	rangeEndDate?: string;
 }
 
 
@@ -29,4 +35,16 @@ export interface RestockPredictionQueryModel {
 	store?        : string;
 	futureDays?   : string;
 	status?       : string;
+}
+
+
+export interface RestockPredictionRangeSummaryModel {
+	productId: number;
+	productName: string;
+	sku: string;
+	variantId: number;
+	variantName: string;
+	totalSales: number;
+	soldPerDay: number;
+	recommendedRestock: number;
 }

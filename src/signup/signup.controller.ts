@@ -1,6 +1,9 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
+
+// Services
 import { SignupService } from './signup.service';
-import type { SignupDataModel } from 'src/models/user.model';
+
+// Dto
 import { SignupDto } from './dto';
 
 

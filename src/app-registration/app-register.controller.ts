@@ -1,6 +1,12 @@
 import { Controller, Post, Body, Headers, UseGuards, HttpCode, HttpStatus, Req, UnauthorizedException } from "@nestjs/common";
+
+// Services
 import { AppRegistrationService } from "./app-register.service";
+
+// Guards
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
+
+// Dto
 import { ShopRegisterDto } from "./dto";
 
 @Controller('registerShop')

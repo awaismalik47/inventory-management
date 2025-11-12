@@ -1,5 +1,9 @@
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+
+// Services
 import { ShopService } from './shop.service';
+
+// Guards
 import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
 
 
