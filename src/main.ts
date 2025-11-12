@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 import { ValidationPipe } from '@nestjs/common';
+import { json, urlencoded } from 'express';
 
 
 async function bootstrap() {
@@ -30,6 +31,9 @@ async function bootstrap() {
 		preflightContinue: false,
 		optionsSuccessStatus: 204,
 	});
+
+	app.use(json({ limit: '1mb' }));
+	app.use(urlencoded({ extended: true, limit: '1mb' }));
 	
 	app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
 

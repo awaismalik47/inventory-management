@@ -5,15 +5,18 @@ import { ProductService } from "src/products/product.service";
 import { OrderService } from "src/orders/order.service";
 
 // Models
-import type { RestockPredictionModel } from "src/models/restock-prediction.model";
+import type { RestockPredictionModel, RestockPredictionRangeSummaryModel } from "src/models/restock-prediction.model";
 import type { IProductModel, IVariantModel } from "src/models/product.model";
 import type { orderModel } from "src/models/order.model";
 
 // Enums
 import { UrgencyLevelEnum } from "src/core/enums";
 
+
 @Injectable()
 export class RestockPredictionService {
+
+	private readonly productsCache = new Map<string, { products: IProductModel[]; lastUpdated: number }>();
 
 	constructor( 
 		private readonly productService: ProductService,
@@ -30,6 +33,8 @@ export class RestockPredictionService {
 
 			// Get data from services - fetches ALL products and orders automatically
 			const { products, orders } = await this.fetchData( store, status );
+
+			this.updateProductsCache( store, status, products );
 			
 			if ( !products || products.length === 0 ) {
 				console.warn(`[RestockPrediction] No products available for store: ${store}`);
@@ -65,6 +70,87 @@ export class RestockPredictionService {
 		}
 	}
 
+
+	async generateCustomRangeSummary(
+		store     : string,
+		futureDays: string = '15',
+		startDate : string,
+		endDate   : string,
+		status    : string = 'active'
+	): Promise<RestockPredictionRangeSummaryModel[]> {
+		try {
+			console.log(`[RestockPrediction] Generating custom range summary for store: ${store}`);
+
+			const ordersResponse = await this.orderService.getAllOrdersByRange(store, startDate, endDate);
+
+			if ( ordersResponse?.error ) {
+				console.warn(`[RestockPrediction] Unable to generate custom range summary due to order fetch error: ${ordersResponse.error}`);
+				return [];
+			}
+
+			const orders = Array.isArray(ordersResponse?.orders) ? ordersResponse.orders : [];
+
+			if ( orders.length === 0 ) {
+				console.warn(`[RestockPrediction] No orders available for custom range in store: ${store}`);
+				return [];
+			}
+
+			const products = await this.getProductsForSummary(store, status);
+
+			if (!products.length) {
+				console.warn(`[RestockPrediction] No products available for store: ${store}`);
+				return [];
+			}
+
+			const parsedStart = ordersResponse?.range?.startDate ? new Date(ordersResponse.range.startDate) : new Date(startDate);
+			const parsedEnd = ordersResponse?.range?.endDate ? new Date(ordersResponse.range.endDate) : new Date(endDate);
+			const rangeDays = this.calculateRangeDayCount(parsedStart, parsedEnd);
+			const predictionDays = this.parsePredictionDays(futureDays);
+
+			const salesByVariant = new Map<number, number>();
+
+			for (const order of orders) {
+				if ( order?.variantId ) {
+					const existingSales = salesByVariant.get(order.variantId) || 0;
+					salesByVariant.set( order.variantId, existingSales + (order.quantity || 0) );
+				}
+			}
+
+			const summaries: RestockPredictionRangeSummaryModel[] = [];
+
+			for ( const product of products ) {
+				for (const variant of product.variants) {
+					const totalSales = salesByVariant.get(variant.id) || 0;
+					const soldPerDay = rangeDays > 0 ? totalSales / rangeDays : 0;
+					const recommendedRestock = this.calculateRestockQuantity(
+						soldPerDay,
+						predictionDays,
+						variant.available || 0,
+						variant.incoming || 0
+					);
+
+					summaries.push({
+						productId: product.id,
+						productName: product.title,
+						sku: variant.sku,
+						variantId: variant.id,
+						variantName: variant.title,
+						totalSales,
+						soldPerDay,
+						recommendedRestock
+					});
+				}
+			}
+
+			console.log(`[RestockPrediction] Generated ${summaries.length} custom range summaries for store: ${store}`);
+			return summaries;
+		} catch (error: any) {
+			console.error(`[RestockPrediction] Error generating custom range summary:`, error.message, error.stack);
+			throw new InternalServerErrorException(`Failed to generate custom range summary: ${error.message}`);
+		}
+	}
+
+	
 	// Fetch data from services - fetches ALL products and orders without pagination
 	// Optimized: Fetches both in parallel for faster execution
 	private async fetchData( store: string, status: string ) {
@@ -126,6 +212,38 @@ export class RestockPredictionService {
 	}
 
 
+	private getProductsCacheKey(store: string, status: string): string {
+		return `${store?.toLowerCase?.() || store}::${status?.toLowerCase?.() || status}`;
+	}
+
+
+	private updateProductsCache(store: string, status: string, products: IProductModel[] | null | undefined): void {
+		if (!products || !Array.isArray(products) || products.length === 0) {
+			return;
+		}
+
+		const cacheKey = this.getProductsCacheKey(store, status);
+		this.productsCache.set(cacheKey, { products, lastUpdated: Date.now() });
+	}
+
+
+	private async getProductsForSummary(store: string, status: string): Promise<IProductModel[]> {
+		const cacheKey = this.getProductsCacheKey(store, status);
+		const cachedEntry = this.productsCache.get(cacheKey);
+
+		if (cachedEntry && Array.isArray(cachedEntry.products) && cachedEntry.products.length > 0) {
+			console.log(`[RestockPrediction] Using cached products for store: ${store}`);
+			return cachedEntry.products;
+		}
+
+		console.log(`[RestockPrediction] No cached products found for store: ${store}. Fetching fresh data...`);
+		const { products } = await this.fetchData(store, status);
+		this.updateProductsCache(store, status, products);
+
+		return Array.isArray(products) ? products : [];
+	}
+
+
 	// Calculate sales data for a specific time period
 	// Optimized: More efficient date filtering and calculations
 	private async calculateSalesForPeriod( products: IProductModel[], orders: orderModel[], days: number ) {
@@ -151,6 +269,29 @@ export class RestockPredictionService {
 		const cutoffDate = new Date();
 		cutoffDate.setDate( cutoffDate.getDate() - days );
 		return cutoffDate;
+	}
+
+
+	private calculateRangeDayCount(startDate: Date, endDate: Date): number {
+		const start = startDate instanceof Date ? new Date(startDate) : new Date();
+		const end = endDate instanceof Date ? new Date(endDate) : new Date();
+
+		if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+			return 1;
+		}
+
+		const adjustedEnd = end.getTime() >= start.getTime() ? end : start;
+
+		const diffMs = adjustedEnd.getTime() - start.getTime();
+		const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+		return Math.max(1, Math.floor(diffMs / MS_PER_DAY) + 1);
+	}
+
+
+	private parsePredictionDays(futureDays: string | null | undefined): number {
+		const parsed = parseInt(`${futureDays ?? ''}`, 10);
+		return Number.isFinite(parsed) && parsed > 0 ? parsed : 15;
 	}
 
 

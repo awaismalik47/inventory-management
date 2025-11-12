@@ -12,9 +12,9 @@ export class OrdersController {
 
 
     @Get()
-    async getAllOrders(@Query() query: { store?: string; days?: string }): Promise<any> {
+    async getAllOrders( @Query() query: { store?: string; days?: string } ): Promise<any> {
         console.log(`[getAllOrders] Starting to fetch orders from last ${query.days ?? '30'} days for store: ${query.store ?? ''}`);
-        return await this.orderService.getAllOrders(query.store ?? '', parseInt(query.days ?? '30'));
+        return await this.orderService.getAllOrders( query.store ?? '', parseInt(query.days ?? '30') );
     }
 
 

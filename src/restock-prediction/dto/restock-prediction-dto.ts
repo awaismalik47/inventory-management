@@ -25,3 +25,26 @@ export class RestockPredictionQueryDto {
 
 	// Note: limit and page removed - endpoint now fetches ALL products and orders automatically
 }
+
+export class RestockPredictionRangeQueryDto {
+	@IsNotEmpty()
+	@IsString()
+	store: string;
+
+	@IsOptional()
+	@IsString()
+	futureDays?: string;
+
+	@IsNotEmpty()
+	@IsString()
+	startDate: string;
+
+	@IsNotEmpty()
+	@IsString()
+	endDate: string;
+
+	@IsOptional()
+	@IsString()
+	status?: string;
+
+}

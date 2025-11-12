@@ -4,13 +4,13 @@ import { Controller, Get, Query, UseGuards, ValidationPipe } from "@nestjs/commo
 import { RestockPredictionService } from "./restock-prediction.service";
 
 // Models
-import type { RestockPredictionModel } from "src/models/restock-prediction.model";
+import type { RestockPredictionModel, RestockPredictionRangeSummaryModel } from "src/models/restock-prediction.model";
 
 // Guards
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 
 // DTOs
-import { RestockPredictionQueryDto } from "./dto/index";
+import { RestockPredictionQueryDto, RestockPredictionRangeQueryDto } from "./dto/index";
 
 
 @Controller('restock-prediction')
@@ -27,6 +27,19 @@ export class RestockPredictionController {
 		return await this.restockPredictionService.generateRestockPredictions(
 			store,
 			futureDays,
+			status
+		);
+	}
+
+
+	@Get( 'range' )
+	async getRestockPredictionsByRange( @Query(new ValidationPipe({ transform: true })) dto: RestockPredictionRangeQueryDto ): Promise<RestockPredictionRangeSummaryModel[]> {
+		const { store, futureDays, startDate, endDate, status } = dto;
+		return await this.restockPredictionService.generateCustomRangeSummary(
+			store,
+			futureDays,
+			startDate,
+			endDate,
 			status
 		);
 	}

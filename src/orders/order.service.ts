@@ -32,24 +32,27 @@ export class OrderService {
 	async getAllOrders( store: string, days: number = 30): Promise<any> {
 		const shop = await this.shopService.findByShop( store );
 
-		if (!shop) {
-			return {
-				error: 'Shop not found. Please complete OAuth flow first.',
-				instructions: 'Visit /shopify-oauth/init?shop=your-store.myshopify.com first'
-			};
-		}
+		if ( !shop ) throw new UnauthorizedException( 'Shop not found. Please complete OAuth flow first.' );
 
 		const accessToken = shop.accessToken as string;
 
 		// Calculate the date N days ago
-		const dateNDaysAgo = new Date();
-		dateNDaysAgo.setDate(dateNDaysAgo.getDate() - days);
-		const createdAtMin = dateNDaysAgo.toISOString();
+		const clampedDays = Number.isFinite(days) && days > 0 ? days : 30;
+		const rangeEnd = new Date();
+		rangeEnd.setHours(23, 59, 59, 999);
+		const rangeStart = new Date(rangeEnd);
+		rangeStart.setDate(rangeStart.getDate() - (clampedDays - 1));
+		rangeStart.setHours(0, 0, 0, 0);
 
-		const searchQuery = `created_at:>=${createdAtMin}`;
+		const createdAtMin = rangeStart.toISOString();
+		const createdAtMax = rangeEnd.toISOString();
+
+		const searchQuery = `created_at:>=${createdAtMin} AND created_at:<=${createdAtMax}`;
 
 		try {
-			console.log(`[getAllOrders] Starting GraphQL fetch for last ${days} days for store: ${store} (since ${createdAtMin})`);
+			console.log(
+				`[getAllOrders] Starting GraphQL fetch for last ${clampedDays} days for store: ${store} (${createdAtMin} → ${createdAtMax})`
+			);
 
 			const orderModels = await this.fetchOrdersUsingGraphQL(
 				store,
@@ -213,24 +216,22 @@ export class OrderService {
 	}
 
 
-	async getStoredOrders(
-		store: string,
-		days: number = 30
-	): Promise<{ orders: orderModel[]; totalOrders: number }> {
-		if (!store) {
+	async getStoredOrders( store: string,days: number = 30 ): Promise<{ orders: orderModel[]; totalOrders: number }> {
+
+		if ( !store ) {
 			throw new UnauthorizedException('Missing store parameter.');
 		}
 
-		const shop = await this.shopService.findByShop(store);
+		const shop = await this.shopService.findByShop( store );
 
 		if (!shop) {
 			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
 		}
 
-		await this.deleteOrdersOlderThan(store, days);
+		await this.deleteOrdersOlderThan( store, days );
 
 		const cutoffDate = new Date();
-		cutoffDate.setDate(cutoffDate.getDate() - days);
+		cutoffDate.setDate( cutoffDate.getDate() - days );
 
 		const docs = await this.orderHistoryModel
 			.find({
@@ -278,11 +279,11 @@ export class OrderService {
 	}
 
 
-	async getOrderFromLocalDb(store: string, orderId: string): Promise<orderModel | null> {
+	async getOrderFromLocalDb(store: string, orderId: string): Promise<orderModel | UnauthorizedException> {
 		const order = await this.orderHistoryModel.findOne({ shop: store, orderId });
 		console.log('order', order);
-		if (!order) {
-			return null;
+		if ( !order ) {
+			throw new UnauthorizedException('Order not found');
 		}
 		return this.mapHistoryToOrderModel(order);
 	}
