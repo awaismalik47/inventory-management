@@ -14,7 +14,27 @@ export class OrdersController {
     @Get()
     async getAllOrders( @Query() query: { store?: string; days?: string } ): Promise<any> {
         console.log(`[getAllOrders] Starting to fetch orders from last ${query.days ?? '30'} days for store: ${query.store ?? ''}`);
-        return await this.orderService.getAllOrders( query.store ?? '', parseInt(query.days ?? '30') );
+        const now = new Date();
+
+        // ---- START DATE ----
+        // Clone current date
+        const startDate = new Date(now);
+        // Move back (days - 1)
+        startDate.setDate( startDate.getDate() - (parseInt(query.days ?? '30') - 1) );
+        // Reset time to start of the day (00:00:00)
+        startDate.setHours(0, 0, 0, 0);
+        
+        // ---- END DATE ----
+        // Clone again to avoid mutation
+        const endDate = new Date(now);
+        // Reset time to end of the day (23:59:59)
+        endDate.setHours(23, 59, 59, 999);
+        
+        // ---- Convert to Shopify UTC ISO format ----
+        const startDateUTC = startDate.toISOString();
+        const endDateUTC = endDate.toISOString();
+
+        return await this.orderService.getAllOrdersByRange( query.store ?? '', startDateUTC, endDateUTC, true );
     }
 
 

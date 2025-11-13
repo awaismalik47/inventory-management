@@ -175,10 +175,10 @@ export class ProductService {
 		}
 	}
 
-	async  getTotalProducts( store: string ) {
+	async  getTotalProducts( store: string, status: string ) {
 
 		const shop = await this.getShop(store);
-		if (!shop) {
+		if ( !shop ) {
 			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
 		}
 
@@ -187,7 +187,7 @@ export class ProductService {
 	  
 		const query = `
 		  {
-			productsCount(query: "status:active") {
+			productsCount(query: "status:${status}") {
 			  count
 			  precision
 			}
