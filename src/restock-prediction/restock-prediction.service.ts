@@ -71,6 +71,18 @@ export class RestockPredictionService {
 	}
 
 
+	private getCutoffDateUTC(days: number): Date {
+		const now = new Date();
+		const cutoff = new Date(Date.UTC(
+			now.getUTCFullYear(),
+			now.getUTCMonth(),
+			now.getUTCDate() - (days - 1),
+			0, 0, 0, 0
+		));
+		return cutoff;
+	}
+
+
 	async generateCustomRangeSummary(
 		store     : string,
 		futureDays: string = '15',
@@ -247,7 +259,7 @@ export class RestockPredictionService {
 	// Calculate sales data for a specific time period
 	// Optimized: More efficient date filtering and calculations
 	private async calculateSalesForPeriod( products: IProductModel[], orders: orderModel[], days: number ) {
-		const cutoffDate     = this.getCutoffDate( days );
+		const cutoffDate     = this.getCutoffDateUTC( days );
 		const cutoffTime     = cutoffDate.getTime();
 		const salesByVariant = new Map<number, number>();
 		
@@ -264,12 +276,12 @@ export class RestockPredictionService {
 	}
 
 
-	// Get cutoff date for filtering orders
-	private getCutoffDate( days: number ): Date {
-		const cutoffDate = new Date();
-		cutoffDate.setDate( cutoffDate.getDate() - days );
-		return cutoffDate;
-	}
+	// // Get cutoff date for filtering orders
+	// private getCutoffDate( days: number ): Date {
+	// 	const cutoffDate = new Date();
+	// 	cutoffDate.setDate( cutoffDate.getDate() - days );
+	// 	return cutoffDate;
+	// }
 
 
 	private calculateRangeDayCount(startDate: Date, endDate: Date): number {

@@ -29,54 +29,7 @@ export class OrderService {
     ) {}
 
 
-	async getAllOrders( store: string, days: number = 30): Promise<any> {
-		const shop = await this.shopService.findByShop( store );
-
-		if ( !shop ) throw new UnauthorizedException( 'Shop not found. Please complete OAuth flow first.' );
-
-		const accessToken = shop.accessToken as string;
-
-		// Calculate the date N days ago
-		const clampedDays = Number.isFinite(days) && days > 0 ? days : 30;
-		const rangeEnd = new Date();
-		rangeEnd.setHours(23, 59, 59, 999);
-		const rangeStart = new Date(rangeEnd);
-		rangeStart.setDate(rangeStart.getDate() - (clampedDays - 1));
-		rangeStart.setHours(0, 0, 0, 0);
-
-		const createdAtMin = rangeStart.toISOString();
-		const createdAtMax = rangeEnd.toISOString();
-
-		const searchQuery = `created_at:>=${createdAtMin} AND created_at:<=${createdAtMax}`;
-
-		try {
-			console.log(
-				`[getAllOrders] Starting GraphQL fetch for last ${clampedDays} days for store: ${store} (${createdAtMin} → ${createdAtMax})`
-			);
-
-			const orderModels = await this.fetchOrdersUsingGraphQL(
-				store,
-				accessToken,
-				searchQuery,
-				'[getAllOrders]'
-			);
-
-			console.log(`[getAllOrders] Completed GraphQL fetch. Total normalized orders: ${orderModels.length}`);
-
-			await this.persistOrdersForShop(store, orderModels);
-
-			return {
-				message: 'Orders fetched successfully',
-				totalOrders: orderModels.length
-			};
-
-		} catch ( error: any ) {
-			throw new Error( error?.message || 'Failed to fetch orders' );
-		}
-	}
-
-
-	async getAllOrdersByRange( store: string, startDate: string, endDate: string ): Promise<any> {
+	async getAllOrdersByRange( store: string, startDate: string, endDate: string, persist: boolean = false ): Promise<any> {
 		console.log(`[getAllOrdersByRange] Starting to fetch orders from ${startDate} to ${endDate} for store: ${store}`);
         if ( !store ) {
             return {
@@ -128,6 +81,13 @@ export class OrderService {
 				'[getAllOrdersByRange]'
 			);
 
+			if ( persist ) {
+				await this.persistOrdersForShop(store, orderModels);
+
+				console.log(`[getAllOrdersByRange] Persisted ${orderModels.length} orders for store: ${store}`);
+			}
+
+
 			return {
 				orders: orderModels,
 				totalOrders: orderModels.length,
@@ -136,6 +96,7 @@ export class OrderService {
 					endDate: normalizedEnd
 				}
 			};
+
 		} catch ( error: any ) {
 			console.error(`[getAllOrdersByRange] Error fetching orders via GraphQL`, {
 				message: error?.message,
