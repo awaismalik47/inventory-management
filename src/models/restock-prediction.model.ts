@@ -1,6 +1,7 @@
 import { UrgencyLevelEnum } from "src/core/enums";
 
 export interface RestockPredictionModel {
+	remainingDaysToReachIncomingStock: number;
 	status: string;
 	productImage: string;
 	productId: number;

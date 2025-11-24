@@ -1,8 +1,11 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 import { ShopService } from 'src/shop/shop.service';
 import { IProductModel, IVariantModel } from 'src/models/product.model';
+import { TrackIncoming, TrackIncomingDocument } from 'src/schema/incoming-history.schema';
 
 
 @Injectable()
@@ -37,7 +40,8 @@ export class ProductService {
 
     constructor(
         private readonly httpService: HttpService,
-        private readonly shopService: ShopService
+        private readonly shopService: ShopService,
+        @InjectModel(TrackIncoming.name) private trackIncomingModel: Model<TrackIncomingDocument>
     ) {}
 
 	private async getShop(store: string): Promise<any> {
@@ -333,7 +337,7 @@ export class ProductService {
 	  }
 
 
-	async getAllProducts(store: string, status: string, skipInventoryFetch: boolean = false ): Promise<any> {
+	async getAllProducts(store: string, status: string, skipInventoryFetch: boolean = false, skipPersist: boolean = true ): Promise<any> {
 		const shop = await this.getShop(store);
 		if (!shop) {
 			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
@@ -465,9 +469,14 @@ export class ProductService {
 				productsWithInventory = await this.fetchInventoryForProducts( allProducts, store, accessToken );
 				console.log(`[getAllProducts] Completed fetching inventory for all products`);
 			}
+
+			const modelData = this.getAllProductsModel({ products: productsWithInventory });
+			if ( !skipPersist ) {
+				await this.persistInventoryForProducts( modelData, store );
+			}
 		  
 			return {
-				products: this.getAllProductsModel({ products: productsWithInventory }),
+				products: modelData,
 				totalProducts: productsWithInventory.length,
 			};
 		} catch (error: any) {
@@ -779,4 +788,485 @@ export class ProductService {
 		}
 	}
 
+
+	// private async persistInventoryForProducts(products: any[], store: string): Promise<void> {
+	// 	console.log(`[persistInventoryForProducts] Persisting variants for ${products.length} products`);
+	
+	// 	// Build variant map efficiently in a single pass
+	// 	const variantMap = new Map<number, any>();
+	// 	const variantIds: number[] = [];
+	
+	// 	for ( const product of products ) {
+	// 		if ( !product.variants || product.variants.length === 0 ) continue;
+	
+	// 		for ( const variant of product.variants ) {
+	// 			if ( !variant.id ) continue;
+				
+	// 			// Ensure we have a valid inventory item id
+	// 			const inventoryItemId = variant.inventory_item_id ? Number( variant.inventory_item_id ) : null;
+	// 			if ( inventoryItemId === null || Number.isNaN(inventoryItemId )) continue;
+	
+	// 			// Use productId from the model format (camelCase)
+	// 			const productId = variant.productId ? Number( variant.productId ) : Number(product.id);
+	// 			if (!productId) continue;
+	
+	// 		const variantId = Number(variant.id);
+			
+	// 		// Store variant data and collect IDs for batch fetch
+	// 		variantMap.set(variantId, {
+	// 			shop: store,
+	// 			inventoryItemId,
+	// 			variantId,
+	// 			productId,
+	// 			incoming: Number(variant.incoming || 0),
+	// 			committed: Number(variant.committed || 0), // Track ordered/committed quantity
+	// 		});
+			
+	// 		variantIds.push(variantId);
+	// 		}
+	// 	}
+	
+	// 	if (variantMap.size === 0) {
+	// 		console.log(`[persistInventoryForProducts] No variants to persist`);
+	// 		return;
+	// 	}
+	
+	// 	// Fetch existing records in a single query
+	// 	const existingRecords = await this.trackIncomingModel.find({
+	// 		shop: store,
+	// 		variantId: { $in: variantIds }
+	// 	}).lean();
+		
+	// 	// Build existing records map for O(1) lookup
+	// 	const existingMap = new Map();
+	// 	for (const record of existingRecords) {
+	// 		existingMap.set(record.variantId, record);
+	// 	}
+	
+	// // Build bulk operations with date tracking logic
+	// const bulkOps: any[] = [];
+	// const variantsToDelete: number[] = [];
+	
+	// for ( const [variantId, variant] of variantMap.entries() ) {
+	// 	const existing    = existingMap.get(variantId);
+	// 	const oldIncoming = existing?.incoming || 0;
+	// 	const newIncoming = variant.incoming;
+		
+	// 	// If incoming is 0 or negative, skip saving and mark for deletion if exists
+	// 	if (newIncoming <= 0) {
+	// 		if (existing) {
+	// 			variantsToDelete.push(variantId);
+	// 		}
+	// 		continue; // Skip this variant, don't save it
+	// 	}
+		
+	// 	// Only proceed if newIncoming > 0
+	// 	let incomingLastChangedAt;
+	// 	const updateData: any = { ...variant };
+		
+	// 	// Logic for tracking when incoming changes (only positive values)
+	// 	if (oldIncoming === 0) {
+	// 		// Changed from 0 to positive - record in history
+	// 		incomingLastChangedAt = new Date();
+	// 		const historyEntry = {
+	// 			date: incomingLastChangedAt,
+	// 			quantity: newIncoming, // Total quantity added (e.g., 0 to 5, quantity is 5)
+	// 			totalOrderQuantity: variant.incoming || 0 // incoming = total ordered quantity
+	// 		};
+	// 		updateData.$push = { incomingHistory: historyEntry };
+	// 	} else if (oldIncoming > 0 && newIncoming > oldIncoming) {
+	// 		// Incoming increased - add new history entry
+	// 		incomingLastChangedAt = new Date();
+	// 		const quantity = newIncoming - oldIncoming; // e.g., 5 to 8, quantity is 3
+	// 		const historyEntry = {
+	// 			date: incomingLastChangedAt,
+	// 			quantity: quantity,
+	// 			totalOrderQuantity: variant.incoming || 0 // incoming = total ordered quantity
+	// 		};
+	// 		updateData.$push = { incomingHistory: historyEntry };
+	// 	} else if (oldIncoming > 0 && newIncoming < oldIncoming) {
+	// 		// Incoming decreased - items received, remove matching purchase order entry
+	// 		incomingLastChangedAt = new Date();
+	// 		const decreaseAmount = oldIncoming - newIncoming; // Amount received
+	// 		// Get existing history and sort by date ascending (oldest first)
+	// 		const existingHistory = (existing?.incomingHistory || []).sort((a: any, b: any) => {
+	// 			return new Date(a.date).getTime() - new Date(b.date).getTime();
+	// 		});
+	// 		const updatedHistory: any[] = [];
+	// 		let foundMatch = false;
+			
+	// 		// Find and remove the entry that matches the decrease amount
+	// 		for (const entry of existingHistory) {
+	// 			if (!foundMatch && entry.quantity === decreaseAmount) {
+	// 				// Found the matching purchase order - remove it (don't add to updatedHistory)
+	// 				foundMatch = true;
+	// 				continue;
+	// 			}
+	// 			// Keep all other entries
+	// 			updatedHistory.push(entry);
+	// 		}
+			
+	// 		// If no exact match found, try to handle partial decreases
+	// 		if (!foundMatch) {
+	// 			// Remove entries until we account for the decrease
+	// 			let remainingDecrease = decreaseAmount;
+	// 			const partialHistory: any[] = [];
+				
+	// 			for (const entry of existingHistory) {
+	// 				if (remainingDecrease <= 0) {
+	// 					partialHistory.push(entry);
+	// 				} else if (entry.quantity <= remainingDecrease) {
+	// 					remainingDecrease -= entry.quantity;
+	// 					// Don't add (remove it)
+	// 				} else {
+	// 					// Partial adjustment
+	// 					partialHistory.push({
+	// 						...entry,
+	// 						quantity: entry.quantity - remainingDecrease
+	// 					});
+	// 					remainingDecrease = 0;
+	// 				}
+	// 			}
+	// 			// Update totalOrderQuantity for all remaining entries
+	// 			const historyWithUpdatedTotal = partialHistory.map(entry => ({
+	// 				...entry,
+	// 				totalOrderQuantity: newIncoming
+	// 			}));
+	// 			updateData.$set = { incomingHistory: historyWithUpdatedTotal };
+	// 		} else {
+	// 			// Update totalOrderQuantity for all remaining entries
+	// 			const historyWithUpdatedTotal = updatedHistory.map(entry => ({
+	// 				...entry,
+	// 				totalOrderQuantity: newIncoming
+	// 			}));
+	// 			// Set the new history array (with matched entry removed)
+	// 			updateData.$set = { incomingHistory: historyWithUpdatedTotal };
+	// 		}
+	// 	} else {
+	// 		// No change in incoming value
+	// 		incomingLastChangedAt = existing?.incomingLastChangedAt || new Date();
+	// 	}
+		
+	// 	updateData.incomingLastChangedAt = incomingLastChangedAt;
+		
+	// 	const updateOperation: any = { 
+	// 		$set: {
+	// 			shop: variant.shop,
+	// 			inventoryItemId: variant.inventoryItemId,
+	// 			variantId: variant.variantId,
+	// 			productId: variant.productId,
+	// 			incoming: newIncoming,
+	// 			incomingLastChangedAt: incomingLastChangedAt
+	// 		}
+	// 	};
+		
+	// 	// Add $push operation if we have history to add (for increases)
+	// 	if (updateData.$push) {
+	// 		updateOperation.$push = updateData.$push;
+	// 	}
+		
+	// 	// Add $set operation for history if we're replacing it (for decreases)
+	// 	if (updateData.$set && updateData.$set.incomingHistory) {
+	// 		// Sort by date ascending (oldest first) before saving
+	// 		const sortedHistory = updateData.$set.incomingHistory.sort((a: any, b: any) => {
+	// 			return new Date(a.date).getTime() - new Date(b.date).getTime();
+	// 		});
+	// 		updateOperation.$set.incomingHistory = sortedHistory;
+	// 	}
+		
+	// 	bulkOps.push({
+	// 		updateOne: {
+	// 			filter: { shop: variant.shop, variantId: variant.variantId },
+	// 			update: updateOperation,
+	// 			upsert: true,
+	// 		},
+	// 	});
+	// }
+	
+	// // Delete records where incoming became 0
+	// if (variantsToDelete.length > 0) {
+	// 	bulkOps.push({
+	// 		deleteMany: {
+	// 			filter: { 
+	// 				shop: store, 
+	// 				variantId: { $in: variantsToDelete } 
+	// 			}
+	// 		}
+	// 	});
+	// }
+	
+	// // Execute bulk operations only if there are any
+	// if (bulkOps.length === 0) {
+	// 	console.log(`[persistInventoryForProducts] No operations to perform (all incoming values are 0)`);
+	// 	return;
+	// }
+
+	// try {
+	// 	const result = await this.trackIncomingModel.bulkWrite(bulkOps, { ordered: false });
+	// 	const deleteCount = variantsToDelete.length;
+	// 	console.log(
+	// 		`[persistInventoryForProducts] Successfully processed ${variantMap.size} variants. ` +
+	// 		`Inserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}, ` +
+	// 		`Matched: ${result.matchedCount}, Deleted: ${deleteCount}`
+	// 	);
+	// } catch (error: any) {
+	// 	console.error('[persistInventoryForProducts] Error during bulk write:', error);
+	// 	throw new UnauthorizedException('Failed to persist variants');
+	// }
+	// }
+
+
+	private async persistInventoryForProducts(products: any[], store: string): Promise<void> {
+		console.log(`[persistInventoryForProducts] Persisting variants for ${products.length} products`);
+	
+		// --- STEP 1: Extract variants ---
+		const { variantMap, variantIds } = this.extractVariants(products, store);
+	
+		if (variantMap.size === 0) {
+			console.log(`[persistInventoryForProducts] No variants to persist`);
+			return;
+		}
+	
+		// --- STEP 2: Fetch existing records ---
+		const existingMap = await this.fetchExistingVariantMap(variantIds, store);
+	
+		// --- STEP 3: Build bulk operations ---
+		const { bulkOps, variantsToDelete } = this.buildBulkOperations(variantMap, existingMap, store);
+	
+		if (bulkOps.length === 0) {
+			console.log(`[persistInventoryForProducts] No operations to perform (all incoming values are 0)`);
+			return;
+		}
+	
+		// --- STEP 4: Execute DB operations ---
+		try {
+			const result = await this.trackIncomingModel.bulkWrite(bulkOps, { ordered: false });
+			console.log(
+				`[persistInventoryForProducts] Successfully processed ${variantMap.size} variants. ` +
+				`Inserted: ${result.upsertedCount}, Modified: ${result.modifiedCount}, ` +
+				`Matched: ${result.matchedCount}, Deleted: ${variantsToDelete.length}`
+			);
+		} catch (error: any) {
+			console.error('[persistInventoryForProducts] Error during bulk write:', error);
+			throw new UnauthorizedException('Failed to persist variants');
+		}
+	}
+
+
+	private extractVariants(products: any[], store: string) {
+		const variantMap = new Map<number, any>();
+		const variantIds: number[] = [];
+	
+		for (const product of products) {
+			if (!product?.variants) continue;
+	
+			for (const variant of product.variants) {
+				if (!variant?.id) continue;
+	
+				const variantId = Number(variant.id);
+				const inventoryItemId = Number(variant.inventory_item_id);
+				if (!inventoryItemId) continue;
+	
+				const productId = Number(variant.productId || product.id);
+				if (!productId) continue;
+	
+				variantMap.set(variantId, {
+					shop: store,
+					productId,
+					variantId,
+					inventoryItemId,
+					incoming: Number(variant.incoming || 0),
+					committed: Number(variant.committed || 0)
+				});
+	
+				variantIds.push(variantId);
+			}
+		}
+	
+		return { variantMap, variantIds };
+	}
+
+	private async fetchExistingVariantMap(variantIds: number[], store: string) {
+		const existingRecords = await this.trackIncomingModel.find({
+			shop: store,
+			variantId: { $in: variantIds }
+		}).lean();
+	
+		const map = new Map();
+		for (const record of existingRecords) {
+			map.set(record.variantId, record);
+		}
+		return map;
+	}
+
+	
+	private buildBulkOperations(
+		variantMap: Map<number, any>,
+		existingMap: Map<number, any>,
+		store: string
+	) {
+		const bulkOps: any[] = [];
+		const variantsToDelete: number[] = [];
+	
+		for (const [variantId, variant] of variantMap.entries()) {
+			const existing = existingMap.get(variantId);
+			const oldIncoming = existing?.incoming || 0;
+			const newIncoming = variant.incoming;
+	
+			// ----------- HANDLE DELETES -----------
+			if (newIncoming <= 0) {
+				if (existing) variantsToDelete.push(variantId);
+				continue;
+			}
+	
+			// ----------- HISTORY LOGIC -----------
+			const updateOperation = this.buildUpdateOperation(
+				variant,
+				existing,
+				oldIncoming,
+				newIncoming
+			);
+	
+			bulkOps.push({
+				updateOne: {
+					filter: { shop: store, variantId },
+					update: updateOperation,
+					upsert: true
+				}
+			});
+		}
+	
+		// ----------- DELETE OLD VARIANTS -----------
+		if (variantsToDelete.length > 0) {
+			bulkOps.push({
+				deleteMany: {
+					filter: { shop: store, variantId: { $in: variantsToDelete } }
+				}
+			});
+		}
+	
+		return { bulkOps, variantsToDelete };
+	}
+	
+	
+private buildUpdateOperation(variant, existing, oldIncoming, newIncoming) {
+	const now = new Date();
+	let historyUpdate: any = {};
+	let incomingLastChangedAt: Date;
+
+	// --- CASE 1: From 0 → positive (new PO)
+	if (oldIncoming === 0 && newIncoming > 0) {
+		incomingLastChangedAt = now;
+		historyUpdate.$push = {
+			incomingHistory: {
+				date: now,
+				quantity: newIncoming,
+				totalOrderQuantity: newIncoming
+			}
+		};
+	}
+
+	// --- CASE 2: Increase (e.g. 5 → 8)
+	else if (newIncoming > oldIncoming) {
+		incomingLastChangedAt = now;
+		historyUpdate.$push = {
+			incomingHistory: {
+				date: now,
+				quantity: newIncoming - oldIncoming,
+				totalOrderQuantity: newIncoming
+			}
+		};
+	}
+
+	// --- CASE 3: Decrease (partial receiving)
+	else if (newIncoming < oldIncoming) {
+		incomingLastChangedAt = now;
+		historyUpdate.$set = {
+			incomingHistory: this.recalculateDecreasedHistory(existing, oldIncoming, newIncoming)
+		};
+	}
+
+	// --- CASE 4: No change in incoming value
+	else {
+		incomingLastChangedAt = existing?.incomingLastChangedAt || now;
+	}
+
+	// FINAL UPDATE OBJECT
+	const updateOperation: any = {
+		$set: {
+			shop: variant.shop,
+			inventoryItemId: variant.inventoryItemId,
+			variantId: variant.variantId,
+			productId: variant.productId,
+			incoming: newIncoming,
+			incomingLastChangedAt: incomingLastChangedAt
+		}
+	};
+
+	// Add $push operation if we have history to add (for increases)
+	if (historyUpdate.$push) {
+		updateOperation.$push = historyUpdate.$push;
+	}
+
+	// Add $set operation for history if we're replacing it (for decreases)
+	if (historyUpdate.$set && historyUpdate.$set.incomingHistory) {
+		// Sort by date ascending (oldest first) before saving
+		const sortedHistory = historyUpdate.$set.incomingHistory.sort((a: any, b: any) => {
+			return new Date(a.date).getTime() - new Date(b.date).getTime();
+		});
+		updateOperation.$set.incomingHistory = sortedHistory;
+	}
+
+	return updateOperation;
+}
+	
+
+	private recalculateDecreasedHistory(existing, oldIncoming, newIncoming) {
+		const decreaseAmount = oldIncoming - newIncoming;
+		const history = [...(existing?.incomingHistory || [])]
+			.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+	
+		let remaining = decreaseAmount;
+		const result: any[] = [];
+	
+		for (const entry of history) {
+			if (remaining <= 0) {
+				result.push(entry);
+				continue;
+			}
+	
+			if (entry.quantity <= remaining) {
+				remaining -= entry.quantity;
+				continue; // drop this entry
+			}
+	
+			// partial reduce
+			result.push({
+				...entry,
+				quantity: entry.quantity - remaining
+			});
+			remaining = 0;
+		}
+	
+		// Update totalOrderQuantity for newIncoming
+		return result.map(entry => ({
+			...entry,
+			totalOrderQuantity: newIncoming
+		}));
+	}
+	
+
+
+	async getIncoming( store: string, variantId: string ): Promise<any> {
+
+		console.log( `[getIncoming] Getting incoming for variant ${variantId} for store ${store}` );
+		const shop = await this.getShop(store);
+		if ( !shop) {
+			throw new UnauthorizedException('Shop not found. Please complete OAuth flow first.');
+		}
+
+		const variant = await this.trackIncomingModel.findOne({ variantId: Number(variantId), shop: store });
+		console.log( `[getIncoming] Incoming for variant ${variantId} for store ${store}:`, variant );
+		return variant;
+	}
 }

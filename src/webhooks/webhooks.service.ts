@@ -11,24 +11,24 @@ export class WebhooksService {
 		async registerAllWebHooks( shopDomain: string , accessToken: string ) {
 			const webhooks = [
 				{
-				  topic: WebhookTopicEnum.OrdersCreate,
-				  address: `${process.env.API_URL}/webhooks/orders/create`,
+					topic: WebhookTopicEnum.OrdersCreate,
+					address: `${process.env.API_URL}/webhooks/orders/create`,
 				},
 				{
-				  topic: WebhookTopicEnum.ProductsUpdate,
-				  address: `${process.env.API_URL}/webhooks/products/update`,
+					topic: WebhookTopicEnum.ProductsUpdate,
+					address: `${process.env.API_URL}/webhooks/products/update`,
 				},
 				{
-				  topic: WebhookTopicEnum.ProductsDelete,
-				  address: `${process.env.API_URL}/webhooks/products/delete`,
+					topic: WebhookTopicEnum.ProductsDelete,
+					address: `${process.env.API_URL}/webhooks/products/delete`,
 				},
 				{
-				  topic: WebhookTopicEnum.ProductsCreate,
-				  address: `${process.env.API_URL}/webhooks/products/create`,
+					topic: WebhookTopicEnum.ProductsCreate,
+					address: `${process.env.API_URL}/webhooks/products/create`,
 				},
 				{
-				  topic: WebhookTopicEnum.AppUninstalled,
-				  address: `${process.env.API_URL}/webhooks/app/uninstalled`,
+					topic: WebhookTopicEnum.AppUninstalled,
+					address: `${process.env.API_URL}/webhooks/app/uninstalled`,
 				},
 				{
 					topic: WebhookTopicEnum.InventoryItemsUpdate,

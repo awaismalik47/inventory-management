@@ -82,7 +82,7 @@ export class OrderService {
 			);
 
 			if ( persist ) {
-				await this.persistOrdersForShop(store, orderModels);
+				await this.persistOrdersForShop( store, orderModels );
 
 				console.log(`[getAllOrdersByRange] Persisted ${orderModels.length} orders for store: ${store}`);
 			}

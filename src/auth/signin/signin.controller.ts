@@ -2,7 +2,7 @@ import { Controller, Post, Body, HttpCode, HttpStatus, BadRequestException } fro
 import { LoginService } from './signin.service';
 
 // Dto
-import { SigninDto } from './dto';
+import { SigninDto } from '../dto';
 
 
 @Controller('login')

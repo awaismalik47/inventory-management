@@ -31,16 +31,16 @@ export class JwtAuthGuard implements CanActivate {
 
 			const userId = payload?.userId;
 
-			const installedShop = await this.shopService.findByInstalledByUserId( userId );
-			if ( !installedShop ) {
-				throw new UnauthorizedException('Invalid token payload');
-			}
+			// const installedShop = await this.shopService.findByInstalledByUserId( userId );
+			// if ( !installedShop ) {
+			// 	throw new UnauthorizedException('Invalid token payload');
+			// }
 
-			const requestedStore = this.extractStoreFromRequest(request);
-			const resolvedShop = await this.resolveShopForRequest(userId, requestedStore);
+			// const requestedStore = this.extractStoreFromRequest(request);
+			// const resolvedShop = await this.resolveShopForRequest(userId, requestedStore);
 
-			request['shop'] = resolvedShop.shop;
-			request['shopDomain'] = resolvedShop.shop;
+			// request['shop'] = resolvedShop.shop;
+			// request['shopDomain'] = resolvedShop.shop;
 
 			// Attach user info to request object for use in controllers
 			request['user'] = payload;
@@ -50,7 +50,18 @@ export class JwtAuthGuard implements CanActivate {
 			return true;
 		} catch ( error: any ) {
 			console.error('JWT verification failed:', error?.message);
-			throw new UnauthorizedException('Invalid token');
+			
+			// Handle specific JWT errors
+			if ( error?.name === 'TokenExpiredError' ) {
+				throw new UnauthorizedException('Your session has expired. Please login again.');
+			} else if ( error?.name === 'JsonWebTokenError' ) {
+				throw new UnauthorizedException('Invalid token. Please login again.');
+			} else if ( error?.name === 'NotBeforeError' ) {
+				throw new UnauthorizedException('Token not yet valid. Please try again later.');
+			}
+			
+			// Generic fallback for other errors
+			throw new UnauthorizedException('Authentication failed. Please login again.');
 		}
 	}
 
