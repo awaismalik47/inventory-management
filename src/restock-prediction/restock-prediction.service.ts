@@ -486,7 +486,6 @@ export class RestockPredictionService {
 	private async getRemainingDaysForIncoming( variantId: number, shop: string ): Promise<{ daysPassed: number, incomingQuantityForSinglePO: number }> {
 		const variantFromLocalDb = await this.trackIncomingModel.findOne({ variantId, shop });
 
-		console.log( variantFromLocalDb, 'variantFromLocalDb' );
 		if ( variantFromLocalDb?.incomingHistory?.length === 1 ) {
 			const date = variantFromLocalDb?.incomingHistory[0]?.date;
 			const incomingQuantityForSinglePO = variantFromLocalDb?.incomingHistory[0]?.quantity;
