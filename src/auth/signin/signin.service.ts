@@ -11,7 +11,7 @@ import { Users } from "src/schema/user.schema";
 import { ShopService } from "src/shop/shop.service";
 
 // Dto
-import { SigninDto } from "./dto";
+import { SigninDto } from "../dto";
 
 
 export class LoginService {

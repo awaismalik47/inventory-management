@@ -4,7 +4,7 @@ import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { SignupService } from './signup.service';
 
 // Dto
-import { SignupDto } from './dto';
+import { SignupDto } from '../dto';
 
 
 @Controller('signup')
